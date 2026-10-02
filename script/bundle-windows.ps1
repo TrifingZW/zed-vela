@@ -143,7 +143,7 @@ function BuildZedAndItsFriends {
     Write-Output "Building Zed and its friends, for channel: $channel"
     # Build zed.exe, cli.exe and auto-update-helper.exe
     cargo --config .cargo/bundle-config.toml build --release --package zed --package cli --package auto_update_helper --target $target
-    Copy-Item -Path ".\$CargoOutDir\zed.exe" -Destination "$innoDir\Zed.exe" -Force
+    Copy-Item -Path ".\$CargoOutDir\zed.exe" -Destination "$innoDir\ZedVela.exe" -Force
     Copy-Item -Path ".\$CargoOutDir\cli.exe" -Destination "$innoDir\cli.exe" -Force
     Copy-Item -Path ".\$CargoOutDir\auto-update-helper.exe" -Destination "$innoDir\auto_update_helper.exe" -Force
     # Build explorer_command_injector.dll
@@ -153,6 +153,11 @@ function BuildZedAndItsFriends {
         }
         "preview" {
             cargo --config .cargo/bundle-config.toml build --release --features preview --no-default-features --package explorer_command_injector --target $target
+        }
+        "dev" {
+            # No channel feature: the injector then uses the dev COM class id and
+            # registry key, matching AppxManifest-Dev.xml and the installer's RegValueName.
+            cargo --config .cargo/bundle-config.toml build --release --no-default-features --package explorer_command_injector --target $target
         }
         default {
             cargo --config .cargo/bundle-config.toml build --release --package explorer_command_injector --target $target
@@ -237,6 +242,9 @@ function MakeAppx {
         "preview" {
             $manifestFile = "$env:ZED_WORKSPACE\crates\explorer_command_injector\AppxManifest-Preview.xml"
         }
+        "dev" {
+            $manifestFile = "$env:ZED_WORKSPACE\crates\explorer_command_injector\AppxManifest-Dev.xml"
+        }
         default {
             $manifestFile = "$env:ZED_WORKSPACE\crates\explorer_command_injector\AppxManifest-Nightly.xml"
         }
@@ -253,7 +261,7 @@ function SignZedAndItsFriends {
         return
     }
 
-    $files = "$innoDir\Zed.exe,$innoDir\cli.exe,$innoDir\auto_update_helper.exe,$innoDir\zed_explorer_command_injector.dll,$innoDir\zed_explorer_command_injector.appx"
+    $files = "$innoDir\ZedVela.exe,$innoDir\cli.exe,$innoDir\auto_update_helper.exe,$innoDir\zed_explorer_command_injector.dll,$innoDir\zed_explorer_command_injector.appx"
     & "$innoDir\sign.ps1" $files
 }
 
@@ -323,57 +331,57 @@ function BuildInstaller {
         "stable" {
             $appId = "{{2DB0DA96-CA55-49BB-AF4F-64AF36A86712}"
             $appIconName = "app-icon"
-            $appName = "Zed"
-            $appDisplayName = "Zed"
-            $appSetupName = "Zed-$Architecture"
+            $appName = "Zed Vela"
+            $appDisplayName = "Zed Vela"
+            $appSetupName = "ZedVela-$Architecture"
             # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Stable-Instance-Mutex"
-            $appExeName = "Zed"
-            $regValueName = "Zed"
-            $appUserId = "ZedIndustries.Zed"
-            $appShellNameShort = "Z&ed"
+            $appMutex = "Zed-Vela-Stable-Instance-Mutex"
+            $appExeName = "ZedVela"
+            $regValueName = "ZedVela"
+            $appUserId = "dev.zed-vela.Zed-Vela"
+            $appShellNameShort = "Zed &Vela"
             $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "preview" {
             $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"
             $appIconName = "app-icon-preview"
-            $appName = "Zed Preview"
-            $appDisplayName = "Zed Preview"
-            $appSetupName = "Zed-$Architecture"
+            $appName = "Zed Vela Preview"
+            $appDisplayName = "Zed Vela Preview"
+            $appSetupName = "ZedVela-$Architecture"
             # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Preview-Instance-Mutex"
-            $appExeName = "Zed"
-            $regValueName = "ZedPreview"
-            $appUserId = "ZedIndustries.Zed.Preview"
-            $appShellNameShort = "Z&ed Preview"
+            $appMutex = "Zed-Vela-Preview-Instance-Mutex"
+            $appExeName = "ZedVela"
+            $regValueName = "ZedVelaPreview"
+            $appUserId = "dev.zed-vela.Zed-Vela-Preview"
+            $appShellNameShort = "Zed &Vela Preview"
             $appAppxFullName = "ZedIndustries.Zed.Preview_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "nightly" {
             $appId = "{{1BDB21D3-14E7-433C-843C-9C97382B2FE0}"
             $appIconName = "app-icon-nightly"
-            $appName = "Zed Nightly"
-            $appDisplayName = "Zed Nightly"
-            $appSetupName = "Zed-$Architecture"
+            $appName = "Zed Vela Nightly"
+            $appDisplayName = "Zed Vela Nightly"
+            $appSetupName = "ZedVela-$Architecture"
             # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Nightly-Instance-Mutex"
-            $appExeName = "Zed"
-            $regValueName = "ZedNightly"
-            $appUserId = "ZedIndustries.Zed.Nightly"
-            $appShellNameShort = "Z&ed Editor Nightly"
+            $appMutex = "Zed-Vela-Nightly-Instance-Mutex"
+            $appExeName = "ZedVela"
+            $regValueName = "ZedVelaNightly"
+            $appUserId = "dev.zed-vela.Zed-Vela-Nightly"
+            $appShellNameShort = "Zed &Vela Nightly"
             $appAppxFullName = "ZedIndustries.Zed.Nightly_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "dev" {
             $appId = "{{8357632E-24A4-4F32-BA97-E575B4D1FE5D}"
             $appIconName = "app-icon-dev"
-            $appName = "Zed Dev"
-            $appDisplayName = "Zed Dev"
-            $appSetupName = "Zed-$Architecture"
+            $appName = "Zed Vela"
+            $appDisplayName = "Zed Vela"
+            $appSetupName = "ZedVela-$Architecture"
             # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Dev-Instance-Mutex"
-            $appExeName = "Zed"
-            $regValueName = "ZedDev"
-            $appUserId = "ZedIndustries.Zed.Dev"
-            $appShellNameShort = "Z&ed Dev"
+            $appMutex = "Zed-Vela-Dev-Instance-Mutex"
+            $appExeName = "ZedVela"
+            $regValueName = "ZedVelaDev"
+            $appUserId = "dev.zed-vela.Zed-Vela-Dev"
+            $appShellNameShort = "Zed &Vela"
             $appAppxFullName = "ZedIndustries.Zed.Dev_1.0.0.0_neutral__japxn1gcva8rg"
         }
         default {
@@ -456,7 +464,7 @@ if ($buildSuccess) {
     Write-Output "Build successful"
     if ($Install) {
         Write-Output "Installing Zed..."
-        Start-Process -FilePath "$env:ZED_WORKSPACE/target/ZedEditorUserSetup-x64-$env:RELEASE_VERSION.exe"
+        Start-Process -FilePath "$env:ZED_WORKSPACE/target/ZedVela-$Architecture.exe"
     }
     exit 0
 }

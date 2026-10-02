@@ -2862,7 +2862,7 @@ impl CollabPanel {
                     .p_2()
                     .h(Tab::container_height(cx))
                     .gap_1p5()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(cx.theme().colors().border)
                     .child(
                         Icon::new(IconName::MagnifyingGlass)
@@ -3841,7 +3841,7 @@ fn render_tree_branch(
     cx: &mut App,
 ) -> impl IntoElement {
     let rem_size = window.rem_size();
-    let thickness = px(1.);
+    let thickness = px(2.);
     let color = cx.theme().colors().icon_disabled;
 
     canvas(

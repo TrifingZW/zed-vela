@@ -231,7 +231,7 @@ impl RenderOnce for Checkbox {
                     .size_4()
                     .rounded_xs()
                     .bg(bg_color)
-                    .border_1()
+                    .border_2()
                     .border_color(border_color)
                     .when(self.disabled, |this| this.cursor_not_allowed())
                     .when(self.disabled, |this| {
@@ -529,7 +529,7 @@ impl RenderOnce for Switch {
                             .when(!self.disabled, |this| {
                                 this.group_hover(group_id.clone(), |el| el.bg(bg_hover_color))
                             })
-                            .border_1()
+                            .border_2()
                             .border_color(border_color)
                             .child(
                                 div()

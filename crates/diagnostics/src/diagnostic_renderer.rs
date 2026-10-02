@@ -239,7 +239,7 @@ impl DiagnosticBlock {
             .pr_0p5()
             .items_start()
             .gap_1()
-            .border_l_2()
+            .border_l_3()
             .line_height(line_height)
             .bg(background_color)
             .border_color(border_color)

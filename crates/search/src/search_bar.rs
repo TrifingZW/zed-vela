@@ -77,7 +77,7 @@ pub(crate) fn input_base_styles(border_color: Hsla, map: impl FnOnce(Div) -> Div
         .min_h_8()
         .pl_2()
         .pr_1()
-        .border_1()
+        .border_2()
         .border_color(border_color)
         .rounded_md()
 }
@@ -91,7 +91,7 @@ pub(crate) fn filter_search_results_input(
             .mr_2()
             .px_2()
             .h_full()
-            .border_r_1()
+            .border_r_2()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().text_accent.opacity(0.05))
             .child(Label::new("Find in Results").color(Color::Muted)),

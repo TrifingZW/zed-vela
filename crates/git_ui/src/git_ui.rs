@@ -1455,7 +1455,7 @@ impl Render for GitCloneModal {
                 div()
                     .w_full()
                     .p_2()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(cx.theme().colors().border_variant)
                     .child(self.repo_input.clone()),
             )

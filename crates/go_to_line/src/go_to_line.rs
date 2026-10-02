@@ -332,7 +332,7 @@ impl Render for GoToLine {
             .on_action(cx.listener(Self::confirm))
             .child(
                 div()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(cx.theme().colors().border_variant)
                     .px_2()
                     .py_1()

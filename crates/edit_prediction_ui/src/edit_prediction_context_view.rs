@@ -283,7 +283,7 @@ impl EditPredictionContextView {
             .w_full()
             .font_buffer(cx)
             .text_xs()
-            .border_t_1()
+            .border_t_2()
             .gap_2()
             .child(v_flex().h_full().flex_1().child({
                 let t0 = run.started_at;

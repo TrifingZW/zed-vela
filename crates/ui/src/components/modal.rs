@@ -286,7 +286,7 @@ impl RenderOnce for ModalFooter {
             .flex_none()
             .justify_between()
             .gap_1()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border_variant)
             .child(div().when_some(self.start_slot, |this, start_slot| this.child(start_slot)))
             .child(div().when_some(self.end_slot, |this, end_slot| this.child(end_slot)))
@@ -368,7 +368,7 @@ impl RenderOnce for Section {
                     v_flex()
                         .w_full()
                         .rounded_sm()
-                        .border_1()
+                        .border_2()
                         .border_color(cx.theme().colors().border)
                         .bg(section_bg)
                         .child(

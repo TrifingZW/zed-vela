@@ -831,7 +831,7 @@ impl RatePredictionsModal {
         h_flex()
             .h_8()
             .px_1()
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().elevated_surface_background)
             .gap_1()
@@ -880,7 +880,7 @@ impl RatePredictionsModal {
                             h_flex()
                                 .h_8()
                                 .px_2()
-                                .border_b_1()
+                                .border_b_2()
                                 .border_color(border_color)
                                 .child(Label::new("Predicted Patch").size(LabelSize::Small)),
                         )
@@ -899,14 +899,14 @@ impl RatePredictionsModal {
                     v_flex()
                         .flex_1()
                         .min_h_0()
-                        .border_t_1()
+                        .border_t_2()
                         .border_color(border_color)
                         .child(
                             h_flex()
                                 .h_8()
                                 .px_2()
                                 .gap_2()
-                                .border_b_1()
+                                .border_b_2()
                                 .border_color(border_color)
                                 .child(Label::new("Expected Patch").size(LabelSize::Small)),
                         )
@@ -981,10 +981,10 @@ impl RatePredictionsModal {
                                         },
                                         border_style: Some(BorderStyle::Solid),
                                         border_widths: EdgesRefinement {
-                                            top: Some(AbsoluteLength::Pixels(px(1.))),
-                                            left: Some(AbsoluteLength::Pixels(px(1.))),
-                                            right: Some(AbsoluteLength::Pixels(px(1.))),
-                                            bottom: Some(AbsoluteLength::Pixels(px(1.))),
+                                            top: Some(AbsoluteLength::Pixels(px(2.))),
+                                            left: Some(AbsoluteLength::Pixels(px(2.))),
+                                            right: Some(AbsoluteLength::Pixels(px(2.))),
+                                            bottom: Some(AbsoluteLength::Pixels(px(2.))),
                                         },
                                         border_color: Some(cx.theme().colors().border_variant),
                                         background: Some(
@@ -1087,7 +1087,7 @@ impl RatePredictionsModal {
                         h_flex()
                             .p_2()
                             .gap_2()
-                            .border_y_1()
+                            .border_y_2()
                             .border_color(border_color)
                             .child(
                                 DropdownMenu::new(
@@ -1134,7 +1134,7 @@ impl RatePredictionsModal {
                         .p_1()
                         .h_8()
                         .max_h_8()
-                        .border_t_1()
+                        .border_t_2()
                         .border_color(border_color)
                         .max_w_full()
                         .justify_between()
@@ -1334,7 +1334,7 @@ impl Render for RatePredictionsModal {
             .on_action(cx.listener(Self::focus_completions))
             .on_action(cx.listener(Self::preview_completion))
             .bg(cx.theme().colors().elevated_surface_background)
-            .border_1()
+            .border_2()
             .border_color(border_color)
             .w(window.viewport_size().width - px(320.))
             .h(window.viewport_size().height - px(300.))
@@ -1344,7 +1344,7 @@ impl Render for RatePredictionsModal {
                 v_flex()
                     .w_72()
                     .h_full()
-                    .border_r_1()
+                    .border_r_2()
                     .border_color(border_color)
                     .flex_shrink_0()
                     .overflow_hidden()
@@ -1354,7 +1354,7 @@ impl Render for RatePredictionsModal {
                             .h_8()
                             .px_2()
                             .justify_between()
-                            .border_b_1()
+                            .border_b_2()
                             .border_color(border_color)
                             .child(Icon::new(icons.base).size(IconSize::Small))
                             .child(

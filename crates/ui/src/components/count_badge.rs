@@ -40,7 +40,7 @@ impl RenderOnce for CountBadge {
             .rounded_full()
             .justify_center()
             .text_center()
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border)
             .bg(bg)
             .shadow_sm()
@@ -66,7 +66,7 @@ impl Component for CountBadge {
             div()
                 .relative()
                 .size_8()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border)
                 .bg(cx.theme().colors().background)
         };

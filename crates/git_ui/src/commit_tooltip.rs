@@ -77,7 +77,7 @@ pub(crate) fn commit_tag_chips(tag_names: &[SharedString]) -> Option<impl IntoEl
     )
 }
 
-const COMMIT_AVATAR_BORDER_WIDTH: Pixels = px(1.);
+const COMMIT_AVATAR_BORDER_WIDTH: Pixels = px(2.);
 
 pub struct CommitAvatar<'a> {
     sha: &'a SharedString,
@@ -383,7 +383,7 @@ impl Render for CommitTooltip {
                                             .child(author_email),
                                     )
                                 })
-                                .border_b_1()
+                                .border_b_2()
                                 .border_color(cx.theme().colors().border_variant),
                         )
                         .children(boundary_notice)
@@ -404,7 +404,7 @@ impl Render for CommitTooltip {
                                 .pt_1()
                                 .gap_1()
                                 .flex_wrap()
-                                .border_t_1()
+                                .border_t_2()
                                 .border_color(cx.theme().colors().border_variant)
                                 .child(absolute_timestamp)
                                 .child(
@@ -509,7 +509,7 @@ pub(crate) fn shallow_boundary_notice(
         v_flex()
             .py_1()
             .gap_2()
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border_variant)
             .child(
                 h_flex()

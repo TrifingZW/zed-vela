@@ -65,7 +65,7 @@ impl RenderOnce for AgentRegistryCard {
                 .min_h(rems_from_px(86_f32))
                 .gap_2()
                 .bg(cx.theme().colors().elevated_surface_background.opacity(0.5))
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .rounded_md()
                 .children(self.children),
@@ -246,7 +246,7 @@ impl AgentRegistryPage {
             .pl_1p5()
             .pr_2()
             .gap_2()
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border)
             .rounded_md()
             .child(Icon::new(IconName::MagnifyingGlass).color(Color::Muted))
@@ -597,7 +597,7 @@ impl Render for AgentRegistryPage {
                 v_flex()
                     .p_4()
                     .gap_4()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(cx.theme().colors().border_variant)
                     .child(
                         h_flex()

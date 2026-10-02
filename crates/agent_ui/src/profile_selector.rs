@@ -237,7 +237,7 @@ impl Render for ProfileSelector {
                     .child(
                         container()
                             .pt_1()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border_variant)
                             .child(Label::new("Cycle Through Profiles"))
                             .child(KeyBinding::for_action(&CycleModeSelector, cx)),
@@ -625,7 +625,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                     .when(ix > 0, |this| {
                         this.mt_1p5()
                             .pt_2()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border_variant)
                     })
                     .child(
@@ -736,7 +736,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                         this.when(description.is_some(), |this| {
                             this.child(
                                 div()
-                                    .border_t_1()
+                                    .border_t_2()
                                     .border_color(cx.theme().colors().border_variant),
                             )
                         })
@@ -786,7 +786,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                 .child(
                     h_flex()
                         .w_full()
-                        .border_t_1()
+                        .border_t_2()
                         .border_color(cx.theme().colors().border_variant)
                         .p_1p5()
                         .child(
@@ -813,7 +813,7 @@ impl PickerDelegate for ProfilePickerDelegate {
                     this.child(
                         h_flex()
                             .w_full()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border_variant)
                             .p_1p5()
                             .child(

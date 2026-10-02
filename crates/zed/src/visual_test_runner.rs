@@ -2900,7 +2900,7 @@ impl gpui::Render for ThreadItemBranchNameTestView {
         let container = || {
             v_flex()
                 .w_80()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().panel_background)
         };
@@ -3150,7 +3150,7 @@ impl gpui::Render for ThreadItemIconDecorationsTestView {
         let container = || {
             v_flex()
                 .w_80()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().panel_background)
         };

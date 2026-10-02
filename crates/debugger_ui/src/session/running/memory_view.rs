@@ -717,7 +717,7 @@ fn render_single_memory_view_line(
                         .color(Color::Muted),
                 )
                 .px_1()
-                .border_r_1()
+                .border_r_2()
                 .border_color(Color::Muted.color(cx)),
         )
         .child(
@@ -820,7 +820,7 @@ fn render_single_memory_view_line(
                 .px_1()
                 .mr_4()
                 // .gap_x_1p5()
-                .border_x_1()
+                .border_x_2()
                 .border_color(Color::Muted.color(cx))
                 .children(memory.iter().enumerate().map(|(ix, cell)| {
                     let as_character = char::from(cell.0.unwrap_or(0));
@@ -881,7 +881,7 @@ impl Render for MemoryView {
                             .w_full()
                             .rounded_sm()
                             .gap_1()
-                            .border_1()
+                            .border_2()
                             .when_else(
                                 self.query_editor
                                     .focus_handle(cx)

@@ -271,10 +271,10 @@ impl MarkdownStyle {
                 },
                 border_style: Some(BorderStyle::Solid),
                 border_widths: EdgesRefinement {
-                    top: Some(AbsoluteLength::Pixels(px(1.))),
-                    left: Some(AbsoluteLength::Pixels(px(1.))),
-                    right: Some(AbsoluteLength::Pixels(px(1.))),
-                    bottom: Some(AbsoluteLength::Pixels(px(1.))),
+                    top: Some(AbsoluteLength::Pixels(px(2.))),
+                    left: Some(AbsoluteLength::Pixels(px(2.))),
+                    right: Some(AbsoluteLength::Pixels(px(2.))),
+                    bottom: Some(AbsoluteLength::Pixels(px(2.))),
                 },
                 border_color: Some(colors.border_variant),
                 background: Some(colors.editor_background.into()),
@@ -2203,7 +2203,7 @@ impl MarkdownElement {
                     .grid_cols(2)
                     .w_full()
                     .mb_2()
-                    .border_1()
+                    .border_2()
                     .border_color(cx.theme().colors().border)
                     .rounded_sm()
                     .overflow_hidden(),
@@ -2271,8 +2271,8 @@ impl MarkdownElement {
                 .px_2()
                 .py_1()
                 .border_color(cx.theme().colors().border)
-                .when(cell_style.row_index > 0, |this| this.border_t_1())
-                .when(!cell_style.is_key, |this| this.border_l_1())
+                .when(cell_style.row_index > 0, |this| this.border_t_2())
+                .when(!cell_style.is_key, |this| this.border_l_2())
                 .when(cell_style.is_key, |this| {
                     this.bg(cx.theme().colors().panel_background)
                 }),
@@ -3043,7 +3043,7 @@ impl Element for MarkdownElement {
                                 builder.rendered_footnote_separator = true;
                                 builder.push_div(
                                     div()
-                                        .border_t_1()
+                                        .border_t_2()
                                         .mt_2()
                                         .border_color(self.style.rule_color),
                                     range,
@@ -3100,7 +3100,7 @@ impl Element for MarkdownElement {
                                         this.grid_cols_max_content(column_count as u16)
                                     })
                                     .mb_2()
-                                    .border(px(1.5))
+                                    .border(px(2.))
                                     .border_color(cx.theme().colors().border)
                                     .rounded_sm()
                                     .restrict_scroll_to_axis()
@@ -3146,8 +3146,8 @@ impl Element for MarkdownElement {
                                 .flex()
                                 .flex_col()
                                 .h_full()
-                                .when(col_index > 0, |this| this.border_l_1())
-                                .when(row_index > 0, |this| this.border_t_1())
+                                .when(col_index > 0, |this| this.border_l_2())
+                                .when(row_index > 0, |this| this.border_t_2())
                                 .border_color(cx.theme().colors().border)
                                 .px(self.style.table_cell_padding.x)
                                 .py(self.style.table_cell_padding.y)
@@ -3391,7 +3391,7 @@ impl Element for MarkdownElement {
                 MarkdownEvent::Rule => {
                     builder.push_div(
                         div()
-                            .border_b_1()
+                            .border_b_2()
                             .my(self.style.paragraph_spacing)
                             .border_color(self.style.rule_color),
                         range,
@@ -3575,10 +3575,10 @@ fn apply_heading_style(
     if let Some(border_color) = border_color {
         heading = match level {
             pulldown_cmark::HeadingLevel::H1 => {
-                heading.pb_2().border_b_1().border_color(border_color)
+                heading.pb_2().border_b_2().border_color(border_color)
             }
             pulldown_cmark::HeadingLevel::H2 => {
-                heading.pb_1().border_b_1().border_color(border_color)
+                heading.pb_1().border_b_2().border_color(border_color)
             }
             _ => heading,
         };

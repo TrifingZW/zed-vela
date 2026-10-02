@@ -183,7 +183,7 @@ impl Render for BareGrid {
                             .size(px(NODE_SIZE))
                             .flex_shrink_0()
                             .bg(background)
-                            .border_1()
+                            .border_2()
                             .border_color(rgb(0x8899aa))
                             .rounded(px(2.0))
                             .when(column_index % 2 == 0, |element| element.cursor_pointer())

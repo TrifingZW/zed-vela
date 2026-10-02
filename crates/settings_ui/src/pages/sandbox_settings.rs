@@ -240,7 +240,7 @@ fn render_empty_state(border_color: gpui::Hsla) -> AnyElement {
     h_flex()
         .p_2()
         .rounded_md()
-        .border_1()
+        .border_2()
         .border_dashed()
         .border_color(border_color)
         .child(

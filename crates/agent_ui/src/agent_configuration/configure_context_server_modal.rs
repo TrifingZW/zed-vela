@@ -838,7 +838,7 @@ impl ConfigureContextServerModal {
         div()
             .p_2()
             .rounded_md()
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border_variant)
             .bg(cx.theme().colors().editor_background)
             .child({

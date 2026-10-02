@@ -574,6 +574,11 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
+        if params.kind == WindowKind::PopUp {
+            // Borderless popups draw their own border; Windows 11 would otherwise add
+            // its own 1px outline around the whole window.
+            disable_dwm_window_border(hwnd);
+        }
         this.state.border_offset.update(hwnd)?;
         let placement =
             retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;

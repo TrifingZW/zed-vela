@@ -571,7 +571,7 @@ impl Member {
                     .size_full()
                     .when(is_maximized, |this| {
                         this.bg(cx.theme().colors().background)
-                            .border_1()
+                            .border_2()
                             .border_color(cx.theme().colors().border)
                             .shadow_lg()
                             .overflow_hidden()
@@ -587,7 +587,7 @@ impl Member {
                                 .size_full()
                                 .left_0()
                                 .top_0()
-                                .border_2()
+                                .border_3()
                                 .border_color(color),
                         )
                     })
@@ -1158,7 +1158,7 @@ mod element {
 
     use super::{HANDLE_HITBOX_SIZE, HORIZONTAL_MIN_SIZE, VERTICAL_MIN_SIZE};
 
-    const DIVIDER_SIZE: f32 = 1.0;
+    const DIVIDER_SIZE: f32 = 2.0;
 
     pub(super) fn pane_axis(
         axis: Axis,
@@ -1492,17 +1492,17 @@ mod element {
 
             for (ix, child) in &mut layout.children.iter_mut().enumerate() {
                 if overlay_opacity.is_some() || overlay_border.is_some() {
-                    // the overlay has to be painted in origin+1px with size width-1px
+                    // the overlay has to be inset by the divider width
                     // in order to accommodate the divider between panels
                     let overlay_bounds = Bounds {
                         origin: child
                             .bounds
                             .origin
-                            .apply_along(Axis::Horizontal, |val| val + px(1.)),
+                            .apply_along(Axis::Horizontal, |val| val + px(DIVIDER_SIZE)),
                         size: child
                             .bounds
                             .size
-                            .apply_along(Axis::Horizontal, |val| val - px(1.)),
+                            .apply_along(Axis::Horizontal, |val| val - px(DIVIDER_SIZE)),
                     };
 
                     if overlay_opacity.is_some()

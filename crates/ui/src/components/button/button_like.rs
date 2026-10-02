@@ -806,7 +806,7 @@ impl RenderOnce for ButtonLike {
             .when_some(self.width, |this, width| {
                 this.w(width).justify_center().text_center()
             })
-            .when(is_outlined, |this| this.border_1())
+            .when(is_outlined, |this| this.border_2())
             .when_some(self.rounding, |this, rounding| {
                 this.when(rounding.top_left, |this| this.rounded_tl_sm())
                     .when(rounding.top_right, |this| this.rounded_tr_sm())

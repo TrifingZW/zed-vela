@@ -177,7 +177,7 @@ impl SystemWindowTabs {
             .relative()
             .px(DynamicSpacing::Base16.px(cx))
             .justify_center()
-            .border_l_1()
+            .border_l_2()
             .border_color(cx.theme().colors().border)
             .cursor_pointer()
             .on_drag(
@@ -346,7 +346,7 @@ impl SystemWindowTabs {
             .flex_1()
             .min_w(rem_size * 10)
             .when(is_active, |this| this.bg(active_background_color))
-            .border_t_1()
+            .border_t_2()
             .border_color(if is_active {
                 active_background_color
             } else {
@@ -474,8 +474,8 @@ impl Render for SystemWindowTabs {
                 h_flex()
                     .h_full()
                     .px(DynamicSpacing::Base06.rems(cx))
-                    .border_t_1()
-                    .border_l_1()
+                    .border_t_2()
+                    .border_l_2()
                     .border_color(cx.theme().colors().border)
                     .child(
                         IconButton::new("plus", IconName::Plus)
@@ -521,7 +521,7 @@ impl Render for DraggedWindowTab {
             } else {
                 self.inactive_background_color
             })
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border)
             .font(ui_font)
             .child(label)

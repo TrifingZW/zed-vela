@@ -176,7 +176,7 @@ impl Render for InstallingZedModal {
                 div()
                     .px_4()
                     .py_3()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(theme.colors().border_variant)
                     .child(Label::new("Installing Zed…")),
             )

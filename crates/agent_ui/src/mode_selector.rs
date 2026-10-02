@@ -172,7 +172,7 @@ impl Render for ModeSelector {
                                 h_flex()
                                     .pt_1()
                                     .gap_2()
-                                    .border_t_1()
+                                    .border_t_2()
                                     .border_color(cx.theme().colors().border_variant)
                                     .justify_between()
                                     .child(Label::new("Cycle Through Modes"))

@@ -41,7 +41,7 @@ impl ThemePreviewTile {
     pub const ROOT_RADIUS: Pixels = px(8.0);
     pub const ROOT_BORDER: Pixels = px(2.0);
     pub const ROOT_PADDING: Pixels = px(2.0);
-    pub const CHILD_BORDER: Pixels = px(1.0);
+    pub const CHILD_BORDER: Pixels = px(2.0);
 
     pub fn new(theme: Arc<Theme>, seed: f32) -> Self {
         Self {

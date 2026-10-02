@@ -710,7 +710,7 @@ impl PickerDelegate for CallHierarchyDelegate {
                 .gap_0p5()
                 .justify_end()
                 .flex_wrap()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .when(!self.root_stack.is_empty(), |this| {
                     this.child(

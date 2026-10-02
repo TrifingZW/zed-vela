@@ -146,7 +146,7 @@ impl RenderOnce for AiSettingItem {
                 .flex_none()
                 .justify_center()
                 .rounded_sm()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().element_active.opacity(0.2))
                 .child(
@@ -256,7 +256,7 @@ impl Component for AiSettingItem {
                 .w_80()
                 .p_2()
                 .gap_2()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().panel_background)
         };

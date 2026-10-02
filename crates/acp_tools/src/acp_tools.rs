@@ -417,7 +417,7 @@ impl AcpTools {
             .items_start()
             .text_size(base_size)
             .border_color(colors.border)
-            .border_b_1()
+            .border_b_2()
             .hover(|this| this.bg(colors.element_background.opacity(0.5)))
             .child(
                 h_flex()
@@ -718,7 +718,7 @@ impl Render for AcpTools {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(cx.theme().colors().border)
                     .child(
                         DropdownMenu::new(

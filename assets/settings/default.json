@@ -128,7 +128,9 @@
     // Whether to limit the width of the rendered markdown content. When
     // enabled, content is constrained to `max_width` and centered
     // horizontally within the preview pane.
-    "limit_content_width": true,
+    // Zed Vela: shipped as `false` so the preview fills the pane edge to edge
+    // instead of leaving the horizontal space unused.
+    "limit_content_width": false,
     // The maximum width, in pixels, of the rendered markdown content when
     // limit_content_width is enabled.
     "max_width": 800,
@@ -1204,7 +1206,9 @@
     // Whether to limit the content width in the agent panel. When enabled,
     // content will be constrained to `max_content_width` and centered when
     // the panel is wider, for optimal readability.
-    "limit_content_width": true,
+    // Zed Vela: shipped as `false` so the panel's title bar, message editor and
+    // input area all use the full available width.
+    "limit_content_width": false,
     // Maximum content width in pixels when limit_content_width is enabled.
     // Content will be centered within the panel.
     "max_content_width": 850,

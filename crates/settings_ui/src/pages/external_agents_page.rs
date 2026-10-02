@@ -112,7 +112,7 @@ fn render_empty_state(cx: &App) -> AnyElement {
     h_flex()
         .p_4()
         .justify_center()
-        .border_1()
+        .border_2()
         .border_dashed()
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
@@ -128,7 +128,7 @@ fn render_no_project_state(cx: &App) -> AnyElement {
     h_flex()
         .p_4()
         .justify_center()
-        .border_1()
+        .border_2()
         .border_dashed()
         .border_color(cx.theme().colors().border.opacity(0.6))
         .rounded_sm()
@@ -313,7 +313,7 @@ pub(crate) fn render_add_agent_popover(
 
     div()
         .rounded_md()
-        .border_1()
+        .border_2()
         .border_color(border_color)
         .child(popover)
 }
@@ -567,7 +567,7 @@ fn input_box(editor: &Entity<Editor>, cx: &App) -> impl IntoElement {
         .px_2()
         .h_8()
         .rounded_md()
-        .border_1()
+        .border_2()
         .border_color(colors.border)
         .bg(colors.editor_background)
         .track_focus(&focus_handle)
@@ -678,7 +678,7 @@ fn render_form_actions(
         .child(
             div()
                 .rounded_md()
-                .border_1()
+                .border_2()
                 .border_color(cancel_border)
                 .child(
                     Button::new("custom-agent-form-cancel", "Cancel")
@@ -693,7 +693,7 @@ fn render_form_actions(
         .child(
             div()
                 .rounded_md()
-                .border_1()
+                .border_2()
                 .border_color(save_border)
                 .child(
                     Button::new("custom-agent-form-save", "Save")

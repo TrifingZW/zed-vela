@@ -1461,7 +1461,7 @@ impl PickerDelegate for WorktreePickerDelegate {
             .p_1p5()
             .gap_0p5()
             .justify_between()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border_variant)
             .child(
                 Button::new("configure-worktree-tasks", "Automate Setup")

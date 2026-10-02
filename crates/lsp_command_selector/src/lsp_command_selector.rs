@@ -363,7 +363,7 @@ impl PickerDelegate for LspCommandSelectorDelegate {
             v_flex()
                 .p_2()
                 .gap_1()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
                     h_flex()

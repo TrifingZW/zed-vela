@@ -125,7 +125,7 @@ impl Render for OnboardingBanner {
         let border_color = cx.theme().colors().editor_foreground.opacity(0.3);
         let banner = h_flex()
             .rounded_sm()
-            .border_1()
+            .border_2()
             .border_color(border_color)
             .occlude()
             .child(
@@ -155,7 +155,7 @@ impl Render for OnboardingBanner {
                     })),
             )
             .child(
-                div().border_l_1().border_color(border_color).child(
+                div().border_l_2().border_color(border_color).child(
                     IconButton::new("close", IconName::Close)
                         .icon_size(IconSize::Indicator)
                         .on_click(cx.listener(|this, _, _window, cx| {

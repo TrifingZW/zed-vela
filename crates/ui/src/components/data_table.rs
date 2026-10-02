@@ -681,7 +681,7 @@ pub fn render_table_row(
             .flex()
             .flex_row()
             .when(!is_striped && table_context.show_row_borders, |row| {
-                row.border_b_1().map(|row| {
+                row.border_b_2().map(|row| {
                     if is_last {
                         row.border_color(transparent_black())
                     } else {
@@ -760,7 +760,7 @@ pub fn render_table_header(
     let outer = h_flex()
         .py_1()
         .w_full()
-        .border_b_1()
+        .border_b_2()
         .border_color(cx.theme().colors().border_variant);
 
     let use_ui_font = table_context.use_ui_font;

@@ -2023,7 +2023,7 @@ impl<'a> ElicitationCard<'a> {
             .mx_5()
             .my_1p5()
             .rounded_md()
-            .border_1()
+            .border_2()
             .border_color(border_color)
             .overflow_hidden()
             .child(
@@ -2203,7 +2203,7 @@ impl<'a> ElicitationCard<'a> {
                             }
                         })
                         .rounded_sm()
-                        .border_1()
+                        .border_2()
                         .border_color(field_border_color)
                         .focus_visible(|this| this.border_color(focused_border_color))
                         .bg(editor_background)
@@ -2422,7 +2422,7 @@ impl<'a> ElicitationCard<'a> {
             .p_1()
             .gap_1()
             .justify_end()
-            .border_t_1()
+            .border_t_2()
             .border_color(border_color)
             .child(
                 Button::new(("elicitation-accept", self.entry_ix), accept_label)

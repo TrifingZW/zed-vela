@@ -515,7 +515,7 @@ impl Render for ConfigOptionSelector {
                             .pt_1()
                             .gap_2()
                             .justify_between()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border_variant)
                             .child(Label::new(label))
                             .child(keybinding)

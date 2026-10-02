@@ -3661,7 +3661,7 @@ impl Pane {
                     .children(pinned_tabs)
                     .when(is_scrollable && is_scrolled, |this| {
                         this.when(has_active_unpinned_tab, |this| this.border_r_2())
-                            .when(!has_active_unpinned_tab, |this| this.border_r_1())
+                            .when(!has_active_unpinned_tab, |this| this.border_r_2())
                             .border_color(cx.theme().colors().border)
                     })
             }))
@@ -3782,7 +3782,7 @@ impl Pane {
             .min_w_6()
             .h(Tab::container_height(cx))
             .flex_grow_1()
-            .border_l_1()
+            .border_l_2()
             .border_color(cx.theme().colors().border)
             // HACK: This empty child is currently necessary to force the drop target to appear
             // despite us setting a min width above.

@@ -418,7 +418,7 @@ impl BlameRenderer for GitBlameRenderer {
                                     .gap_2()
                                     .overflow_x_hidden()
                                     .flex_wrap()
-                                    .border_b_1()
+                                    .border_b_2()
                                     .border_color(cx.theme().colors().border_variant)
                                     .child(avatar)
                                     .child(author)
@@ -448,7 +448,7 @@ impl BlameRenderer for GitBlameRenderer {
                                     .pt_1()
                                     .gap_1()
                                     .flex_wrap()
-                                    .border_t_1()
+                                    .border_t_2()
                                     .border_color(cx.theme().colors().border_variant)
                                     .child(absolute_timestamp)
                                     .child(

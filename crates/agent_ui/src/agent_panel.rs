@@ -6249,7 +6249,7 @@ impl AgentPanel {
             .flex_shrink_0()
             .max_w_full()
             .bg(cx.theme().colors().tab_bar_background)
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border)
             .child(toolbar_content)
     }
@@ -6681,7 +6681,7 @@ impl Render for AgentPanel {
                                         .relative()
                                         .py(DynamicSpacing::Base06.rems(cx))
                                         .px(DynamicSpacing::Base08.rems(cx))
-                                        .border_b_1()
+                                        .border_b_2()
                                         .border_color(cx.theme().colors().border_variant)
                                         .bg(cx.theme().colors().toolbar_background)
                                         .child(search_bar),

@@ -203,7 +203,7 @@ impl Render for ChannelModal {
                                     .px_2()
                                     .py_1()
                                     .cursor_pointer()
-                                    .border_b_2()
+                                    .border_b_3()
                                     .when(mode == Mode::ManageMembers, |this| {
                                         this.border_color(cx.theme().colors().border)
                                     })
@@ -218,7 +218,7 @@ impl Render for ChannelModal {
                                     .px_2()
                                     .py_1()
                                     .cursor_pointer()
-                                    .border_b_2()
+                                    .border_b_3()
                                     .when(mode == Mode::InviteMembers, |this| {
                                         this.border_color(cx.theme().colors().border)
                                     })

@@ -146,7 +146,7 @@ impl RenderOnce for TreeViewItem {
             .justify_center()
             .child(
                 div()
-                    .w_px()
+                    .w(px(2.))
                     .h_full()
                     .bg(cx.theme().colors().border.opacity(0.5)),
             );
@@ -179,7 +179,7 @@ impl RenderOnce for TreeViewItem {
                     .pr_1()
                     .gap_2()
                     .rounded_sm()
-                    .border_1()
+                    .border_2()
                     .border_color(transparent_border)
                     .focus_visible(|s| s.border_color(focused_border))
                     .when(self.selected, |this| {
@@ -247,7 +247,7 @@ impl Component for TreeViewItem {
             v_flex()
                 .p_2()
                 .w_64()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().panel_background)
         };

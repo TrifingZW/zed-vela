@@ -610,7 +610,7 @@ impl HighlightsTreeView {
             .gap_1()
             .px(rems(0.5))
             .bg(colors.surface_background)
-            .border_b_1()
+            .border_b_2()
             .border_color(colors.border_variant)
             .child(
                 Label::new(label.clone())
@@ -1286,7 +1286,7 @@ fn render_style_preview(style: HighlightStyle, selected: bool, cx: &App) -> Div 
 
     if let Some(color) = display_color {
         if selected {
-            preview = preview.border_1().border_color(color).text_color(color);
+            preview = preview.border_2().border_color(color).text_color(color);
         } else {
             preview = preview.bg(color);
         }

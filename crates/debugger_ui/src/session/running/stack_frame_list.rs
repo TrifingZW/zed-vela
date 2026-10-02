@@ -639,7 +639,7 @@ impl StackFrameList {
                             .right_2()
                             .overflow_hidden()
                             .rounded_md()
-                            .border_1()
+                            .border_2()
                             .border_color(cx.theme().colors().element_selected)
                             .bg(cx.theme().colors().element_background)
                             .hover(|style| {
@@ -945,7 +945,7 @@ impl Render for StackFrameList {
                 el.child(
                     h_flex()
                         .bg(cx.theme().status().warning_background)
-                        .border_b_1()
+                        .border_b_2()
                         .border_color(cx.theme().status().warning_border)
                         .pl_1()
                         .child(Icon::new(IconName::Warning).color(Color::Warning))

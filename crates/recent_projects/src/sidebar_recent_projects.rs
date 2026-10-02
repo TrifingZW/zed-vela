@@ -386,7 +386,7 @@ impl PickerDelegate for SidebarRecentProjectsDelegate {
                 .p_1p5()
                 .flex_1()
                 .gap_1()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child({
                     let open_action = workspace::Open {

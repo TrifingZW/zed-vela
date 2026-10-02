@@ -324,7 +324,7 @@ impl PickerDelegate for DevContainerPickerDelegate {
                 .p_1p5()
                 .gap_1()
                 .justify_start()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
                     Button::new("run-action", "Start Dev Container")
@@ -581,7 +581,7 @@ impl gpui::Render for ProjectPicker {
             })
             .child(
                 div()
-                    .border_t_1()
+                    .border_t_2()
                     .border_color(cx.theme().colors().border_variant)
                     .child(self.picker.clone()),
             )
@@ -1379,7 +1379,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 .w_full()
                 .p_1p5()
                 .justify_end()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(buttons)
                 .into_any(),
@@ -2500,7 +2500,7 @@ impl RemoteServerProjects {
             .child(
                 div()
                     .p_2()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(theme.colors().border_variant)
                     .child(state.address_editor.clone()),
             )
@@ -2939,7 +2939,7 @@ impl RemoteServerProjects {
             .child(
                 h_flex()
                     .p_2()
-                    .border_t_1()
+                    .border_t_2()
                     .border_color(cx.theme().colors().border_variant)
                     .child(state.editor.clone()),
             )

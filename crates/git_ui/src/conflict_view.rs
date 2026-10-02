@@ -648,7 +648,7 @@ impl Render for MergeConflictIndicator {
         h_flex()
             .h(rems_from_px(22_f32))
             .rounded_sm()
-            .border_1()
+            .border_2()
             .border_color(border_color)
             .child(
                 ButtonLike::new("update-button")
@@ -678,7 +678,7 @@ impl Render for MergeConflictIndicator {
                     })),
             )
             .child(
-                div().border_l_1().border_color(border_color).child(
+                div().border_l_2().border_color(border_color).child(
                     IconButton::new("dismiss-merge-conflicts", IconName::Close)
                         .icon_size(IconSize::XSmall)
                         .on_click(cx.listener(Self::dismiss)),

@@ -23,7 +23,7 @@ impl TableView {
             .px_3()
             .py_2()
             .bg(theme.colors().editor_background)
-            .border_1()
+            .border_2()
             .border_color(theme.colors().border)
             .rounded_md()
             .opacity(0.75)

@@ -1691,7 +1691,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                     .flex_1()
                     .p_1p5()
                     .gap_1()
-                    .border_t_1()
+                    .border_t_2()
                     .border_color(cx.theme().colors().border_variant)
                     .child({
                         ButtonLike::new("open_local_folder")
@@ -1813,7 +1813,7 @@ impl PickerDelegate for RecentProjectsDelegate {
                 .p_1p5()
                 .gap_1()
                 .justify_end()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .when_some(secondary_footer_actions, |this, actions| {
                     this.child(actions)

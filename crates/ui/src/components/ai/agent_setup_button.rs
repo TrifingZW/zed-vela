@@ -96,7 +96,7 @@ impl RenderOnce for AgentSetupButton {
                 .p_0p5()
                 .h_full()
                 .justify_center()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().element_background.opacity(0.5))
                 .child(state_element)
@@ -104,7 +104,7 @@ impl RenderOnce for AgentSetupButton {
 
         v_flex()
             .id(self.id)
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border_variant)
             .rounded_sm()
             .when(is_clickable, |this| {

@@ -191,7 +191,7 @@ impl Render for InputField {
                     .text_color(style.text_color)
                     .rounded_md()
                     .bg(style.background_color)
-                    .border_1()
+                    .border_2()
                     .border_color(style.border_color)
                     .when(
                         editor.focus_handle(cx).contains_focused(window, cx),

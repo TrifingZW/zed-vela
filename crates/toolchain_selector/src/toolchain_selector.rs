@@ -392,7 +392,7 @@ impl Render for AddToolchainState {
             // todo: These modal styles shouldn't be needed as the modal picker already has `elevation_3`
             // They get duplicated in the middle state of adding a virtual env, but then are needed for this last state
             .bg(cx.theme().colors().elevated_surface_background)
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border_variant)
             .rounded_lg()
             .when_some(weak, |this, weak| {
@@ -428,7 +428,7 @@ impl Render for AddToolchainState {
                                 h_flex()
                                     .w_full()
                                     .p_2()
-                                    .border_b_1()
+                                    .border_b_2()
                                     .border_color(theme.colors().border)
                                     .child(editor.clone()),
                             )

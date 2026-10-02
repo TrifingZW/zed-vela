@@ -142,7 +142,7 @@ impl IndentGuides {
                             layout.offset.x * self.indent_size + self.left_offset,
                             layout.offset.y * item_height,
                         ),
-                        size(px(1.), layout.length * item_height),
+                        size(px(2.), layout.length * item_height),
                     ),
                     layout,
                     is_active: false,

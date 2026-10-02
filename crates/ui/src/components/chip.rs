@@ -109,7 +109,7 @@ impl RenderOnce for Chip {
             .when(!self.truncate, |this| this.flex_none())
             .gap_0p5()
             .px_1()
-            .border_1()
+            .border_2()
             .rounded_sm()
             .border_color(border_color)
             .bg(bg_color)

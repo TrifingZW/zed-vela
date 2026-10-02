@@ -40,7 +40,7 @@ impl RenderOnce for AgentPanelOnboardingCard {
                         .px_4()
                         .py_3()
                         .gap_2()
-                        .border_1()
+                        .border_2()
                         .rounded(px(5.))
                         .border_color(color.text.opacity(0.1))
                         .bg(color.panel_background)

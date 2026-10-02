@@ -4059,7 +4059,7 @@ impl ThreadView {
                     .flex_grow_0()
                     .max_w_full()
                     .bg(self.activity_bar_bg(cx))
-                    .border_1()
+                    .border_2()
                     .border_b_0()
                     .border_color(cx.theme().colors().border)
                     .rounded_t_md()
@@ -4218,7 +4218,7 @@ impl ThreadView {
                             .justify_between()
                             .bg(editor_bg_color)
                             .when(index < changed_buffers.len() - 1, |parent| {
-                                parent.border_color(cx.theme().colors().border).border_b_1()
+                                parent.border_color(cx.theme().colors().border).border_b_2()
                             })
                             .child(
                                 h_flex()
@@ -4639,7 +4639,7 @@ impl ThreadView {
                         .px_2()
                         .w_full()
                         .gap_1()
-                        .border_b_1()
+                        .border_b_2()
                         .border_color(cx.theme().colors().border)
                         .child(
                             Label::new("Subagents Awaiting Permission:")
@@ -4667,7 +4667,7 @@ impl ThreadView {
                                 .bg(cx.theme().colors().editor_background)
                                 .hover(|s| s.bg(cx.theme().colors().element_hover))
                                 .when(!is_last, |this| {
-                                    this.border_b_1().border_color(cx.theme().colors().border)
+                                    this.border_b_2().border_color(cx.theme().colors().border)
                                 })
                                 .child(
                                     h_flex()
@@ -4771,7 +4771,7 @@ impl ThreadView {
             .w_full()
             .gap_1p5()
             .justify_between()
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border)
             .child(
                 h_flex()
@@ -4822,7 +4822,7 @@ impl ThreadView {
             .gap_1()
             .justify_between()
             .when(self.queue_expanded, |this| {
-                this.border_b_1().border_color(cx.theme().colors().border)
+                this.border_b_2().border_color(cx.theme().colors().border)
             })
             .child(
                 h_flex()
@@ -5089,7 +5089,7 @@ impl ThreadView {
                             .relative()
                             .bg(entry_bg)
                             .when(index < entries.len() - 1, |parent| {
-                                parent.border_color(cx.theme().colors().border).border_b_1()
+                                parent.border_color(cx.theme().colors().border).border_b_2()
                             })
                             .overflow_hidden()
                             .child(
@@ -5186,7 +5186,7 @@ impl ThreadView {
                     .pt_1p5()
                     .mb_1p5()
                     .gap_1p5()
-                    .border_1()
+                    .border_2()
                     .border_color(gpui::transparent_black())
                     .rounded_sm()
                     .child(header)
@@ -5223,7 +5223,7 @@ impl ThreadView {
                             })
                             .child(
                                 h_flex()
-                                    .border_t_1()
+                                    .border_t_2()
                                     .border_color(self.tool_card_border_color(cx))
                                     .child(
                                         IconButton::new(
@@ -5296,7 +5296,7 @@ impl ThreadView {
             .justify_between()
             .flex_wrap()
             .when(expanded, |this| {
-                this.border_b_1().border_color(cx.theme().colors().border)
+                this.border_b_2().border_color(cx.theme().colors().border)
             })
             .child(
                 h_flex()
@@ -5475,7 +5475,7 @@ impl ThreadView {
             h_flex()
                 .w_full()
                 .h(Tab::container_height(cx))
-                .border_b_1()
+                .border_b_2()
                 .when(is_done && is_canceled_or_failed, |this| {
                     this.border_dashed()
                 })
@@ -5603,7 +5603,7 @@ impl ThreadView {
             .map(|this| {
                 if has_messages {
                     this.on_action(cx.listener(Self::expand_message_editor))
-                        .border_t_1()
+                        .border_t_2()
                         .border_color(cx.theme().colors().border)
                         .when(editor_expanded, |this| this.h(vh(0.8, window)))
                 } else {
@@ -5813,7 +5813,7 @@ impl ThreadView {
                     .gap_1()
                     .bg(cx.theme().colors().editor_background)
                     .when(index < queue_len - 1, |this| {
-                        this.border_b_1()
+                        this.border_b_2()
                             .border_color(cx.theme().colors().border_variant)
                     })
                     .child(
@@ -6595,7 +6595,7 @@ impl ThreadView {
                             .pt_1()
                             .gap_2()
                             .justify_between()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border_variant)
                             .child(Label::new("Cycle Thinking Effort"))
                             .child(KeyBinding::for_action_in(
@@ -6774,7 +6774,7 @@ impl ThreadView {
                                         .pt_1()
                                         .gap_2()
                                         .justify_between()
-                                        .border_t_1()
+                                        .border_t_2()
                                         .border_color(cx.theme().colors().border_variant)
                                         .child(Label::new("Send Immediately"))
                                         .child(KeyBinding::for_action_in(
@@ -7110,7 +7110,7 @@ impl Render for TokenUsageTooltip {
                             .mt_1p5()
                             .pt_1p5()
                             .gap_0p5()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border_variant)
                             .child(
                                 Label::new("Cost")
@@ -7129,7 +7129,7 @@ impl Render for TokenUsageTooltip {
                                 .pt_1p5()
                                 .pb_0p5()
                                 .gap_0p5()
-                                .border_t_1()
+                                .border_t_2()
                                 .border_color(cx.theme().colors().border_variant)
                                 .child(
                                     Label::new("Rules")
@@ -7518,7 +7518,7 @@ impl ThreadView {
                                     .px_2()
                                     .rounded_md()
                                     .bg(cx.theme().colors().editor_background)
-                                    .border_1()
+                                    .border_2()
                                     .when(is_indented, |this| {
                                         this.py_2().px_2().when(opaque_window, |this| {
                                             this.shadow_sm()
@@ -7553,7 +7553,7 @@ impl ThreadView {
                                     .right_3()
                                     .gap_1()
                                     .rounded_sm()
-                                    .border_1()
+                                    .border_2()
                                     .border_color(cx.theme().colors().border)
                                     .bg(cx.theme().colors().editor_background)
                                     .overflow_hidden();
@@ -7839,7 +7839,7 @@ impl ThreadView {
                         .left(rems_from_px(18.0_f32))
                         .top(line_top)
                         .bottom_0()
-                        .w_px()
+                        .w(px(2.))
                         .bg(cx.theme().colors().border.opacity(0.6)),
                 )
                 .child(primary)
@@ -8038,7 +8038,7 @@ impl ThreadView {
             .mx_5()
             .gap_1()
             .rounded_md()
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().editor_background)
             .child(div().w_full().child(editor))
@@ -8893,7 +8893,7 @@ impl ThreadView {
                                 .id(("thinking-content", chunk_ix))
                                 .ml_1p5()
                                 .pl_3p5()
-                                .border_l_1()
+                                .border_l_2()
                                 .border_color(self.tool_card_border_color(cx))
                                 .when(is_constrained, |this| this.max_h_64())
                                 .when_some(scroll_handle, |this, scroll_handle| {
@@ -9521,7 +9521,7 @@ impl ThreadView {
             .when(layout == ToolCallLayout::Standalone, |this| {
                 this.my_1p5()
                     .mx_5()
-                    .border_1()
+                    .border_2()
                     .when(tool_failed || command_failed, |card| card.border_dashed())
                     .border_color(border_color)
                     .rounded_md()
@@ -9531,7 +9531,7 @@ impl ThreadView {
             .when(is_expanded && terminal_view.is_some(), |this| {
                 this.child(
                     div()
-                        .border_t_1()
+                        .border_t_2()
                         .when(tool_failed || command_failed, |card| card.border_dashed())
                         .border_color(border_color)
                         .rounded_b_md()
@@ -9859,7 +9859,7 @@ impl ThreadView {
                                 v_flex()
                                     .p_2()
                                     .gap_1()
-                                    .border_t_1()
+                                    .border_t_2()
                                     .border_color(self.tool_card_border_color(cx))
                                     .child(
                                         h_flex()
@@ -9936,7 +9936,7 @@ impl ThreadView {
                                 .px_3p5()
                                 .pb_1()
                                 .gap_1()
-                                .border_l_1()
+                                .border_l_2()
                                 .border_color(self.tool_card_border_color(cx))
                                 .child(input_output_header("Raw Input:".into()))
                                 .children(tool_call.raw_input_markdown.clone().map(|input| {
@@ -9983,7 +9983,7 @@ impl ThreadView {
                                 .ml(rems(0.4))
                                 .px_3p5()
                                 .pt_2()
-                                .border_l_1()
+                                .border_l_2()
                                 .border_color(self.tool_card_border_color(cx))
                                 .child(
                                     IconButton::new(button_id, IconName::ChevronUp)
@@ -10242,7 +10242,7 @@ impl ThreadView {
                 } else if use_card_layout {
                     this.my_1p5()
                         .rounded_md()
-                        .border_1()
+                        .border_2()
                         .when(failed_or_canceled, |this| this.border_dashed())
                         .border_color(self.tool_card_border_color(cx))
                         .bg(cx.theme().colors().editor_background)
@@ -10422,7 +10422,7 @@ impl ThreadView {
                                 .py_1p5()
                                 .bg(cx.theme().colors().editor_background)
                                 .when(host_ix < hosts.len() - 1, |this| {
-                                    this.border_b_1().border_color(cx.theme().colors().border)
+                                    this.border_b_2().border_color(cx.theme().colors().border)
                                 })
                                 .child(
                                     Label::new(host.clone())
@@ -10556,7 +10556,7 @@ impl ThreadView {
         // The command stays in the tool-call title above; here we show what the
         // command is asking for (paths / domains) and the agent's reason.
         v_flex()
-            .border_t_1()
+            .border_t_2()
             .border_color(self.tool_card_border_color(cx))
             .when(has_windows_fs_warning, |this| {
                 this.child(self.render_sandbox_windows_fs_warning(cx))
@@ -10671,7 +10671,7 @@ impl ThreadView {
             .w_full()
             .p_2()
             .gap_2()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().status().error_border)
             .bg(cx.theme().status().error_background.opacity(0.15))
             .child(
@@ -10777,7 +10777,7 @@ impl ThreadView {
             .w_full()
             .p_2()
             .gap_1()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().status().warning_border)
             .bg(cx.theme().status().warning_background.opacity(0.15))
             .child(
@@ -10874,7 +10874,7 @@ impl ThreadView {
             .p_1p5()
             .gap_1p5()
             .items_start()
-            .border_t_1()
+            .border_t_2()
             .border_color(self.tool_card_border_color(cx))
             .child(
                 Icon::new(IconName::Warning)
@@ -11093,7 +11093,7 @@ impl ThreadView {
             .p_1()
             .gap_2()
             .justify_between()
-            .border_t_1()
+            .border_t_2()
             .border_color(self.tool_card_border_color(cx))
             .child(
                 h_flex()
@@ -11432,7 +11432,7 @@ impl ThreadView {
 
         div()
             .p_1()
-            .border_t_1()
+            .border_t_2()
             .border_color(self.tool_card_border_color(cx))
             .w_full()
             .v_flex()
@@ -11866,7 +11866,7 @@ impl ThreadView {
                             .gap_1()
                             .p_2()
                             .when(context_ix > 0, |this| {
-                                this.border_t_1()
+                                this.border_t_2()
                                     .border_color(self.tool_card_border_color(cx))
                             })
                             .child(
@@ -11991,13 +11991,13 @@ impl ThreadView {
             .map(|this| {
                 if card_layout {
                     this.p_2().when(context_ix > 0, |this| {
-                        this.border_t_1()
+                        this.border_t_2()
                             .border_color(self.tool_card_border_color(cx))
                     })
                 } else {
                     this.ml(rems(0.4))
                         .px_3p5()
-                        .border_l_1()
+                        .border_l_2()
                         .border_color(self.tool_card_border_color(cx))
                 }
             })
@@ -12068,7 +12068,7 @@ impl ThreadView {
         div()
             .ml(rems(0.4))
             .pl_2p5()
-            .border_l_1()
+            .border_l_2()
             .border_color(self.tool_card_border_color(cx))
             .overflow_hidden()
             .child(
@@ -12121,7 +12121,7 @@ impl ThreadView {
         v_flex()
             .h_full()
             .when(show_top_border, |this| {
-                this.border_t_1()
+                this.border_t_2()
                     .when(has_failed, |this| this.border_dashed())
                     .border_color(self.tool_card_border_color(cx))
             })
@@ -12165,13 +12165,13 @@ impl ThreadView {
             .map(|this| {
                 if card_layout {
                     this.p_2().when(context_ix > 0, |this| {
-                        this.border_t_1()
+                        this.border_t_2()
                             .border_color(self.tool_card_border_color(cx))
                     })
                 } else {
                     this.ml(rems(0.4))
                         .px_3p5()
-                        .border_l_1()
+                        .border_l_2()
                         .border_color(self.tool_card_border_color(cx))
                 }
             })
@@ -12227,7 +12227,7 @@ impl ThreadView {
                 } else {
                     this.ml(rems(0.4))
                         .px_3p5()
-                        .border_l_1()
+                        .border_l_2()
                         .border_color(self.tool_card_border_color(cx))
                 }
             })
@@ -12398,7 +12398,7 @@ impl ThreadView {
         v_flex()
             .w_full()
             .rounded_md()
-            .border_1()
+            .border_2()
             .when(has_no_title_or_canceled, |this| this.border_dashed())
             .border_color(self.tool_card_border_color(cx))
             .overflow_hidden()
@@ -12570,7 +12570,7 @@ impl ThreadView {
                     .py_1()
                     .w_full()
                     .justify_center()
-                    .border_t_1()
+                    .border_t_2()
                     .when(is_failed_or_canceled, |this| this.border_dashed())
                     .border_color(self.tool_card_border_color(cx))
                     .cursor_pointer()
@@ -12711,9 +12711,7 @@ impl ThreadView {
         v_flex()
             .w_full()
             .border_t_1()
-            .when(state.status.is_failed_or_canceled(), |this| {
-                this.border_dashed()
-            })
+            .when(is_canceled_or_failed, |this| this.border_dashed())
             .border_color(self.tool_card_border_color(cx))
             .overflow_hidden()
             .child(
@@ -13600,7 +13598,7 @@ impl ThreadView {
                 .pr_3()
                 .w_full()
                 .gap_1p5()
-                .border_b_1()
+                .border_b_2()
                 .border_color(cx.theme().colors().border)
                 .bg(cx.theme().colors().element_background)
                 .child(

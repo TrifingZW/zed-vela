@@ -2054,7 +2054,7 @@ impl Render for KeymapEditor {
                                     .min_w_0()
                                     .h_8()
                                     .px_2()
-                                    .border_1()
+                                    .border_2()
                                     .border_color(theme.colors().border)
                                     .rounded_md()
                                     .child(self.filter_editor.clone()),
@@ -2362,7 +2362,7 @@ impl Render for KeymapEditor {
                                             row.tooltip(Tooltip::text("This action is unbound"))
                                         }),
                                 )
-                                .border_2()
+                                .border_3()
                                 .when(
                                     conflict.is_some_and(|conflict| {
                                         conflict.is_user_keybind_conflict()
@@ -3106,7 +3106,7 @@ impl Render for KeybindingEditorModal {
                                 .pb_1p5()
                                 .mb_1()
                                 .gap_0p5()
-                                .border_b_1()
+                                .border_b_2()
                                 .border_color(theme.border_variant)
                                 .when(!self.creating, |this| {
                                     this.child(Label::new(
@@ -3505,7 +3505,7 @@ impl Render for ActionArgumentsEditor {
             .flex_grow_1()
             .rounded_md()
             .bg(cx.theme().colors().editor_background)
-            .border_1()
+            .border_2()
             .border_color(border_color)
             .track_focus(&self.focus_handle)
             .child(self.editor.clone())

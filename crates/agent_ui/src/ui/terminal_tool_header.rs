@@ -334,7 +334,7 @@ impl Component for TerminalToolHeader {
         let card = |_id: &'static str, header: TerminalToolHeader| {
             v_flex()
                 .w_full()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border.opacity(0.6))
                 .rounded_md()
                 .overflow_hidden()

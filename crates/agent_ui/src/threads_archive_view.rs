@@ -875,6 +875,11 @@ impl ThreadsArchiveView {
 
         h_flex()
             .h(header_height)
+            // Zed Vela: the client-side insets scale with
+            // `theme::CLIENT_SIDE_DECORATION_BORDER` (2px in Zed Vela), which keeps
+            // this header's bottom border in step with the title bar's. The server
+            // case gets the extra pixel of top margin so the same edges line up
+            // with its 2px header border.
             .map(|header| match window.window_decorations() {
                 Decorations::Client { .. } => apply_title_bar_insets(
                     header,
@@ -882,7 +887,7 @@ impl ThreadsArchiveView {
                     right_window_controls,
                     false,
                 ),
-                Decorations::Server => header.mt_px().pb_px(),
+                Decorations::Server => header.mt(px(2.)).pb_px(),
             })
             .when(left_window_controls, |this| {
                 this.children(Self::render_left_window_controls(window, cx))
@@ -899,7 +904,7 @@ impl ThreadsArchiveView {
             .when(!right_window_controls, |this| this.pr_1p5())
             .gap_1()
             .justify_between()
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border)
             .when(traffic_lights, |this| {
                 this.child(Divider::vertical().color(ui::DividerColor::Border))
@@ -976,7 +981,7 @@ impl ThreadsArchiveView {
             .pr_1p5()
             .h(Tab::content_height(cx))
             .justify_between()
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border)
             .child(
                 Label::new(count_label)
@@ -1620,7 +1625,7 @@ impl PickerDelegate for ProjectPickerDelegate {
                 .p_1p5()
                 .gap_1()
                 .justify_end()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
                     Button::new("open_local_folder", "Choose from Local Folders")

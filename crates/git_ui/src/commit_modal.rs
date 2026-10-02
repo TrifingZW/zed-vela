@@ -649,7 +649,7 @@ impl Render for CommitModal {
             .relative()
             .bg(cx.theme().colors().elevated_surface_background)
             .rounded(px(border_radius))
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border)
             .child(
                 v_flex()
@@ -662,7 +662,7 @@ impl Render for CommitModal {
                     .rounded(properties.editor_border_radius())
                     .overflow_hidden()
                     .bg(cx.theme().colors().editor_background)
-                    .border_1()
+                    .border_2()
                     .border_color(if title_exceeds_limit {
                         cx.theme().status().warning_border
                     } else {

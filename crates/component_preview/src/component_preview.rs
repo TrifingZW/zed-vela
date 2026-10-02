@@ -449,7 +449,7 @@ impl ComponentPreview {
             .py_2()
             .child(
                 v_flex()
-                    .border_1()
+                    .border_2()
                     .border_color(cx.theme().colors().border)
                     .rounded_sm()
                     .w_full()
@@ -601,7 +601,7 @@ impl Render for ComponentPreview {
             .child(
                 v_flex()
                     .h_full()
-                    .border_r_1()
+                    .border_r_2()
                     .border_color(cx.theme().colors().border)
                     .child(
                         div()
@@ -641,7 +641,7 @@ impl Render for ComponentPreview {
                         div()
                             .w_full()
                             .p_2p5()
-                            .border_t_1()
+                            .border_t_2()
                             .border_color(cx.theme().colors().border)
                             .child(
                                 Button::new("toast-test", "Launch Toast")
@@ -663,7 +663,7 @@ impl Render for ComponentPreview {
                         div()
                             .p_2()
                             .w_full()
-                            .border_b_1()
+                            .border_b_2()
                             .border_color(cx.theme().colors().border)
                             .child(self.filter_editor.clone()),
                     )
@@ -944,7 +944,7 @@ impl ComponentPreviewPage {
             .p_12()
             .gap_6()
             .bg(cx.theme().colors().surface_background)
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border)
             .child(
                 v_flex()

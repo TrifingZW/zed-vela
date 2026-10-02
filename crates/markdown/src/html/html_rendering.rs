@@ -226,7 +226,7 @@ impl MarkdownElement {
                     this.grid_cols_max_content(max_column_count as u16)
                 })
                 .mb_2()
-                .border(px(1.5))
+                .border(px(2.))
                 .border_color(cx.theme().colors().border)
                 .rounded_sm()
                 .overflow_hidden(),
@@ -259,8 +259,8 @@ impl MarkdownElement {
                     .row_span(cell.row_span.min(total_rows - row_index) as u16)
                     .flex()
                     .flex_col()
-                    .when(column_index > 0, |this| this.border_l_1())
-                    .when(row_index > 0, |this| this.border_t_1())
+                    .when(column_index > 0, |this| this.border_l_2())
+                    .when(row_index > 0, |this| this.border_t_2())
                     .border_color(cx.theme().colors().border)
                     .px_2()
                     .py_1()
@@ -327,8 +327,8 @@ impl MarkdownElement {
 
                 builder.push_div(
                     div()
-                        .when(column_index > 0, |this| this.border_l_1())
-                        .when(row_index > 0, |this| this.border_t_1())
+                        .when(column_index > 0, |this| this.border_l_2())
+                        .when(row_index > 0, |this| this.border_t_2())
                         .border_color(cx.theme().colors().border)
                         .when(row_index % 2 == 1, |this| {
                             this.bg(cx.theme().colors().panel_background)

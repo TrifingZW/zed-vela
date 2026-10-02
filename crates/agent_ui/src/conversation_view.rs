@@ -3355,7 +3355,7 @@ impl ConversationView {
             .w_full()
             .p_3p5()
             .gap_2p5()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border)
             .bg(linear_gradient(
                 180.,

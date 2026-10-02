@@ -198,7 +198,7 @@ impl EditorBlock {
                 .items_start()
                 .min_h(text_line_height)
                 .w_full()
-                .border_y_1()
+                .border_y_2()
                 .border_color(cx.theme().colors().border)
                 .bg(cx.theme().colors().background)
                 .child(

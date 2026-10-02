@@ -494,7 +494,7 @@ impl Render for KeystrokeInput {
             .h_4()
             .pr_1()
             .gap_0p5()
-            .border_1()
+            .border_2()
             .border_color(colors.border)
             .bg(colors
                 .editor_background
@@ -512,7 +512,7 @@ impl Render for KeystrokeInput {
             .h_4()
             .pr_1()
             .gap_0p5()
-            .border_1()
+            .border_2()
             .border_color(colors.border)
             .bg(colors
                 .editor_background
@@ -554,7 +554,7 @@ impl Render for KeystrokeInput {
                     this.bg(colors.editor_background)
                 }
             })
-            .border_1()
+            .border_2()
             .map(|this| {
                 if is_focused {
                     this.border_color(colors.border_focused)

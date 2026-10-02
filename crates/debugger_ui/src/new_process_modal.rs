@@ -725,7 +725,7 @@ impl Render for NewProcessModal {
                     .p_1p5()
                     .gap_2()
                     .justify_between()
-                    .border_t_1()
+                    .border_t_2()
                     .border_color(cx.theme().colors().border_variant);
                 let secondary_action = menu::SecondaryConfirm.boxed_clone();
                 match self.mode {
@@ -1485,7 +1485,7 @@ impl PickerDelegate for DebugDelegate {
             .w_full()
             .p_1p5()
             .justify_between()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border_variant)
             .child({
                 let action = menu::SecondaryConfirm.boxed_clone();

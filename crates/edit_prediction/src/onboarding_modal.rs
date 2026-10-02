@@ -128,7 +128,7 @@ impl Render for ZedPredictModal {
                 div()
                     .p_3()
                     .size_full()
-                    .border_1()
+                    .border_2()
                     .border_color(cx.theme().colors().border)
                     .rounded(px(5.))
                     .bg(linear_gradient(

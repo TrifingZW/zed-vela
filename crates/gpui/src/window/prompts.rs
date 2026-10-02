@@ -132,7 +132,7 @@ impl Render for FallbackPromptRenderer {
                     .flex()
                     .flex_row()
                     .justify_around()
-                    .border_1()
+                    .border_2()
                     .border_color(opaque_grey(0.2, 0.5))
                     .mt_1()
                     .rounded_xs()

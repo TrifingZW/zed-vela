@@ -147,6 +147,32 @@ pub(crate) fn configure_dwm_dark_mode(hwnd: HWND, appearance: WindowAppearance) 
     }
 }
 
+/// Removes the 1px border DWM draws around top-level windows on Windows 11.
+///
+/// Borderless popups (like the agent notification toast) render their own
+/// background, border and shadow, often on a transparent window, so the
+/// system-drawn outline shows up as an unwanted second border.
+pub(crate) fn disable_dwm_window_border(hwnd: HWND) {
+    let mut version = unsafe { std::mem::zeroed() };
+    let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
+
+    // `DWMWA_BORDER_COLOR` is only available on Windows 11 (build 22000) and later.
+    if !status.is_ok() || version.dwBuildNumber < 22000 {
+        return;
+    }
+
+    let border_color = DWMWA_COLOR_NONE;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color as *const _ as _,
+            std::mem::size_of_val(&border_color) as u32,
+        )
+        .log_err();
+    }
+}
+
 #[inline]
 pub(crate) fn logical_point(x: f32, y: f32, scale_factor: f32) -> Point<Pixels> {
     Point {

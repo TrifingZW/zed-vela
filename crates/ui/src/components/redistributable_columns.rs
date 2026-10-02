@@ -14,7 +14,7 @@ use gpui::{
 use std::rc::Rc;
 
 pub(crate) const RESIZE_COLUMN_WIDTH: f32 = 8.0;
-pub(crate) const RESIZE_DIVIDER_WIDTH: f32 = 1.0;
+pub(crate) const RESIZE_DIVIDER_WIDTH: f32 = 2.0;
 
 /// Drag payload for column resize handles.
 /// Includes the `EntityId` of the owning column state so that

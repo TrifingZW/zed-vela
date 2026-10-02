@@ -102,15 +102,15 @@ impl Divider {
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| {
-                    let mut builder = PathBuilder::stroke(px(1.)).dash_array(&[px(4.), px(2.)]);
+                    let mut builder = PathBuilder::stroke(px(2.)).dash_array(&[px(4.), px(2.)]);
                     let (start, end) = match self.direction {
                         DividerDirection::Horizontal => {
                             let x = bounds.origin.x;
-                            let y = bounds.origin.y + px(0.5);
+                            let y = bounds.origin.y + px(1.);
                             (point(x, y), point(x + bounds.size.width, y))
                         }
                         DividerDirection::Vertical => {
-                            let x = bounds.origin.x + px(0.5);
+                            let x = bounds.origin.x + px(1.);
                             let y = bounds.origin.y;
                             (point(x, y), point(x, y + bounds.size.height))
                         }
@@ -139,13 +139,13 @@ impl RenderOnce for Divider {
         let mut base = match self.direction {
             DividerDirection::Horizontal => div()
                 .min_w_0()
-                .h_px()
-                .max_h_px()
+                .h(px(2.))
+                .max_h(px(2.))
                 .w_full()
                 .when(self.inset, |this| this.mx_1p5()),
             DividerDirection::Vertical => div()
                 .min_w_0()
-                .w_px()
+                .w(px(2.))
                 .h_4()
                 .when(self.inset, |this| this.my_1p5()),
         };

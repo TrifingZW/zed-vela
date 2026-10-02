@@ -266,7 +266,7 @@ impl RenderOnce for SettingsInputField {
             .h_8()
             .min_w_64()
             .rounded_md()
-            .border_1()
+            .border_2()
             .border_color(theme_colors.border)
             .bg(theme_colors.editor_background)
             .map(|this| {

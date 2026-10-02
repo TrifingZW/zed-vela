@@ -426,7 +426,7 @@ impl PickerDelegate for TemplatePickerDelegate {
                 .p_1p5()
                 .gap_1()
                 .justify_start()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
                     Button::new("run-action", "Continue")
@@ -623,7 +623,7 @@ impl PickerDelegate for FeaturePickerDelegate {
                 .p_1p5()
                 .gap_1()
                 .justify_start()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
                     Button::new("run-action", "Select Feature")

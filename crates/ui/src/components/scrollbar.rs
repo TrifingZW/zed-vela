@@ -28,7 +28,7 @@ const SCROLLBAR_SHOW_DURATION: Duration = Duration::from_millis(50);
 
 pub const EDITOR_SCROLLBAR_WIDTH: Pixels = ScrollbarStyle::Editor.to_pixels();
 const SCROLLBAR_PADDING: Pixels = px(4.);
-const BORDER_WIDTH: Pixels = px(1.);
+const BORDER_WIDTH: Pixels = px(2.);
 
 pub mod scrollbars {
     use gpui::{App, Global};

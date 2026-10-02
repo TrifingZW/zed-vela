@@ -655,7 +655,7 @@ impl PickerDelegate for TasksModalDelegate {
                 .w_full()
                 .p_1p5()
                 .justify_between()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
                 .child(
                     left_button

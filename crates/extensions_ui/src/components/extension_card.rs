@@ -626,7 +626,7 @@ impl RenderOnce for ExtensionCard {
                 .p_3()
                 .gap_2()
                 .bg(cx.theme().colors().elevated_surface_background.opacity(0.5))
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .rounded_md()
                 .child(

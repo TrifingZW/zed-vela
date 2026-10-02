@@ -7436,7 +7436,7 @@ impl GitPanel {
                         .px_2()
                         .py_1()
                         .gap_1()
-                        .border_t_1()
+                        .border_t_2()
                         .border_color(cx.theme().status().warning_border)
                         .bg(cx.theme().status().warning_background.opacity(0.5))
                         .child(
@@ -7457,7 +7457,7 @@ impl GitPanel {
                     .id("commit-editor-container")
                     .w_full()
                     .when(self.commit_editor_expanded, |this| this.flex_1().min_h_0())
-                    .border_t_1()
+                    .border_t_2()
                     .border_color(if title_exceeds_limit {
                         cx.theme().status().warning_border
                     } else {
@@ -7496,7 +7496,7 @@ impl GitPanel {
                             .id("commit-footer")
                             .w_full()
                             .p_1p5()
-                            .border_t_1()
+                            .border_t_2()
                             .when(editor_is_long, |el| {
                                 el.border_color(cx.theme().colors().border_variant)
                             })
@@ -7601,7 +7601,7 @@ impl GitPanel {
             .px_2()
             .gap_1p5()
             .justify_between()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border.opacity(0.8))
             .child(
                 div()
@@ -7638,7 +7638,7 @@ impl GitPanel {
                 .p_1p5()
                 .gap_1p5()
                 .justify_between()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border.opacity(0.8))
                 .child(
                     div()
@@ -7755,7 +7755,7 @@ impl GitPanel {
                 .flex_1()
                 .justify_center()
                 .hover(|s| s.bg(cx.theme().colors().element_hover))
-                .border_b_1()
+                .border_b_2()
                 .when(!active, |s| {
                     s.bg(cx.theme().colors().editor_background.opacity(0.6))
                         .border_color(cx.theme().colors().border.opacity(0.6))
@@ -8242,7 +8242,7 @@ impl GitPanel {
                                         .py_1()
                                         .px_2()
                                         .gap_0p5()
-                                        .border_1()
+                                        .border_2()
                                         .border_color(gpui::transparent_black())
                                         .when(
                                             is_focused && is_panel_focused && show_focus_border,
@@ -8326,7 +8326,7 @@ impl GitPanel {
                                                             .flex_none()
                                                             .justify_center()
                                                             .rounded_sm()
-                                                            .border_1()
+                                                            .border_2()
                                                             .border_color(
                                                                 cx.theme().colors().border,
                                                             )
@@ -8835,7 +8835,7 @@ impl GitPanel {
             .justify_between()
             .cursor_pointer()
             .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
-            .border_1()
+            .border_2()
             .border_r_2()
             .child(
                 h_flex()
@@ -9343,7 +9343,7 @@ impl GitPanel {
             .pl_2p5()
             .pr_1()
             .gap_1p5()
-            .border_1()
+            .border_2()
             .border_r_2()
             .when(selected && self.focus_handle.is_focused(window), |el| {
                 el.border_color(cx.theme().colors().panel_focused_border)
@@ -9588,7 +9588,7 @@ impl GitPanel {
             .pr_1()
             .gap_1p5()
             .justify_between()
-            .border_1()
+            .border_2()
             .border_r_2()
             .when(selected && self.focus_handle.is_focused(window), |el| {
                 el.border_color(cx.theme().colors().panel_focused_border)

@@ -904,7 +904,7 @@ impl CommitView {
             .w_full()
             .py_2p5()
             .gap_2()
-            .border_b_1()
+            .border_b_2()
             .border_color(cx.theme().colors().border_variant)
             .child(
                 h_flex()

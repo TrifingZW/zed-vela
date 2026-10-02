@@ -35,7 +35,7 @@ impl ErrorView {
                         .w_full()
                         .px(padding)
                         .py(padding)
-                        .border_l_1()
+                        .border_l_2()
                         .border_color(theme.status().error_border)
                         .child(self.traceback.clone()),
                 )

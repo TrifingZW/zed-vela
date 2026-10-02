@@ -9598,7 +9598,7 @@ fn leader_border_for_pane(
             .size_full()
             .left_0()
             .top_0()
-            .border_2()
+            .border_3()
             .border_color(leader_color),
     )
 }
@@ -10034,8 +10034,8 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .overflow_hidden()
-                            .border_t_1()
-                            .border_b_1()
+                            .border_t_2()
+                            .border_b_2()
                             .border_color(colors.border)
                             .child({
                                 let this = cx.entity();
@@ -10147,7 +10147,7 @@ impl Render for Workspace {
                                                                 .when_some(
                                                                     centered_paddings.0,
                                                                     |this, p| {
-                                                                        this.child(p.border_r_1())
+                                                                        this.child(p.border_r_2())
                                                                     },
                                                                 )
                                                                 .child(self.render_center(
@@ -10158,7 +10158,7 @@ impl Render for Workspace {
                                                                 .when_some(
                                                                     centered_paddings.1,
                                                                     |this, p| {
-                                                                        this.child(p.border_l_1())
+                                                                        this.child(p.border_l_2())
                                                                     },
                                                                 ),
                                                         ),
@@ -10211,7 +10211,7 @@ impl Render for Workspace {
                                                                             centered_paddings.0,
                                                                             |this, p| {
                                                                                 this.child(
-                                                                                    p.border_r_1(),
+                                                                                    p.border_r_2(),
                                                                                 )
                                                                             },
                                                                         )
@@ -10224,7 +10224,7 @@ impl Render for Workspace {
                                                                             centered_paddings.1,
                                                                             |this, p| {
                                                                                 this.child(
-                                                                                    p.border_l_1(),
+                                                                                    p.border_l_2(),
                                                                                 )
                                                                             },
                                                                         ),
@@ -10278,7 +10278,7 @@ impl Render for Workspace {
                                                                             centered_paddings.0,
                                                                             |this, p| {
                                                                                 this.child(
-                                                                                    p.border_r_1(),
+                                                                                    p.border_r_2(),
                                                                                 )
                                                                             },
                                                                         )
@@ -10291,7 +10291,7 @@ impl Render for Workspace {
                                                                             centered_paddings.1,
                                                                             |this, p| {
                                                                                 this.child(
-                                                                                    p.border_l_1(),
+                                                                                    p.border_l_2(),
                                                                                 )
                                                                             },
                                                                         ),
@@ -10332,7 +10332,7 @@ impl Render for Workspace {
                                                         .flex_1()
                                                         .when_some(
                                                             centered_paddings.0,
-                                                            |this, p| this.child(p.border_r_1()),
+                                                            |this, p| this.child(p.border_r_2()),
                                                         )
                                                         .child(self.render_center(
                                                             &pane_render_context,
@@ -10341,7 +10341,7 @@ impl Render for Workspace {
                                                         ))
                                                         .when_some(
                                                             centered_paddings.1,
-                                                            |this, p| this.child(p.border_l_1()),
+                                                            |this, p| this.child(p.border_l_2()),
                                                         ),
                                                 )
                                                 .children(self.render_dock(
@@ -10366,7 +10366,7 @@ impl Render for Workspace {
                                     (left, right) => h_flex()
                                         .size_full()
                                         .when_some(left, |this, padding| {
-                                            this.child(padding.border_r_1().debug_selector(|| {
+                                            this.child(padding.border_r_2().debug_selector(|| {
                                                 "zoomed_centered_layout_left_padding".into()
                                             }))
                                         })
@@ -10379,7 +10379,7 @@ impl Render for Workspace {
                                                 .child(zoomed_view),
                                         )
                                         .when_some(right, |this, padding| {
-                                            this.child(padding.border_l_1().debug_selector(|| {
+                                            this.child(padding.border_l_2().debug_selector(|| {
                                                 "zoomed_centered_layout_right_padding".into()
                                             }))
                                         })
@@ -10400,11 +10400,11 @@ impl Render for Workspace {
                                 }
 
                                 Some(match self.zoomed_position {
-                                    Some(DockPosition::Left) => overlay.right_2().border_r_1(),
-                                    Some(DockPosition::Right) => overlay.left_2().border_l_1(),
-                                    Some(DockPosition::Bottom) => overlay.top_2().border_t_1(),
+                                    Some(DockPosition::Left) => overlay.right_2().border_r_2(),
+                                    Some(DockPosition::Right) => overlay.left_2().border_l_2(),
+                                    Some(DockPosition::Bottom) => overlay.top_2().border_t_2(),
                                     None => {
-                                        overlay.top_2().bottom_2().left_2().right_2().border_1()
+                                        overlay.top_2().bottom_2().left_2().right_2().border_2()
                                     }
                                 })
                             }))

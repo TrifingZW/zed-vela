@@ -2007,7 +2007,7 @@ impl PickerDelegate for BranchListDelegate {
                     this.pt_1p5()
                         .when(show_divider, |this| {
                             this.mt_1()
-                                .border_t_1()
+                                .border_t_2()
                                 .border_color(cx.theme().colors().border_variant)
                         })
                         .child(ListSubHeader::new(section_header).inset(true))
@@ -2030,7 +2030,7 @@ impl PickerDelegate for BranchListDelegate {
             h_flex()
                 .w_full()
                 .p_1p5()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border_variant)
         };
 

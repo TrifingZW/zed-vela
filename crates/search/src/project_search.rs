@@ -3127,7 +3127,7 @@ impl Render for ProjectSearchBar {
         let matches_column = h_flex()
             .ml_1()
             .pl_1p5()
-            .border_l_1()
+            .border_l_2()
             .border_color(theme_colors.border_variant)
             .child(render_local_action_button(
                 "project-search-nav-button",

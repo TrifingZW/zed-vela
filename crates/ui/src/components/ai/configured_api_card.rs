@@ -66,7 +66,7 @@ impl RenderOnce for ConfiguredApiCard {
             .flex_wrap()
             .justify_between()
             .rounded_md()
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border_variant)
             .bg(cx.theme().colors().background.opacity(0.5))
             .child(
@@ -115,7 +115,7 @@ impl Component for ConfiguredApiCard {
                 .w_72()
                 .p_2()
                 .gap_2()
-                .border_1()
+                .border_2()
                 .border_color(cx.theme().colors().border_variant)
                 .bg(cx.theme().colors().panel_background)
         };

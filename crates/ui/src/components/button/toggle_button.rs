@@ -377,7 +377,7 @@ impl<T: ButtonBuilder, const COLS: usize, const ROWS: usize> RenderOnce
                 if is_transparent {
                     this.gap_px()
                 } else {
-                    this.border_1().border_color(border_color)
+                    this.border_2().border_color(border_color)
                 }
             })
             .children(entries.enumerate().map(|(row_index, row)| {
@@ -385,13 +385,13 @@ impl<T: ButtonBuilder, const COLS: usize, const ROWS: usize> RenderOnce
                 h_flex()
                     .when(!is_outlined_or_filled, |this| this.gap_px())
                     .when(is_outlined_or_filled && !last_row, |this| {
-                        this.border_b_1().border_color(border_color)
+                        this.border_b_2().border_color(border_color)
                     })
                     .children(row.enumerate().map(|(item_index, item)| {
                         let last_item = item_index == COLS - 1;
                         div()
                             .when(is_outlined_or_filled && !last_item, |this| {
-                                this.border_r_1().border_color(border_color)
+                                this.border_r_2().border_color(border_color)
                             })
                             .when(!self.auto_width, |this| this.w(Self::button_width()))
                             .overflow_hidden()

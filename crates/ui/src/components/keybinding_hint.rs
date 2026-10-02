@@ -239,7 +239,7 @@ impl RenderOnce for KeybindingHint {
                     .rounded_sm()
                     .px_0p5()
                     .mr_0p5()
-                    .border_1()
+                    .border_2()
                     .border_color(border_color)
                     .bg(bg_color)
                     .shadow(vec![BoxShadow::new(px(0.), px(1.), shadow_color)])

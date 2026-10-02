@@ -90,7 +90,7 @@ impl Render for OpenUrlModal {
             .child(
                 div()
                     .p_2()
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(theme.colors().border_variant)
                     .child(self.editor.clone()),
             )

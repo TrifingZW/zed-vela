@@ -808,7 +808,7 @@ impl SkillCreatorPage {
             .min_h(px(160.))
             .p_2p5()
             .rounded_md()
-            .border_1()
+            .border_2()
             .border_color(border_color)
             .bg(theme.colors().editor_background)
             .track_focus(&focus_handle)
@@ -842,7 +842,7 @@ impl SkillCreatorPage {
             .w_full()
             .py_2p5()
             .px_8()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border_variant.opacity(0.4))
             .when(self.save_error.is_some(), |this| {
                 this.gap_2().child(

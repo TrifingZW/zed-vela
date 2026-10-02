@@ -410,7 +410,7 @@ impl EditorElement {
 
         let text_bounds = layout.position_map.text_hitbox.bounds;
         let border_top = text_bounds.top() + last_line_offset + layout.position_map.line_height;
-        let separator_height = px(1.);
+        let separator_height = px(2.);
         let border_bounds = window.pixel_snap_bounds(Bounds::from_corners(
             point(layout.gutter_hitbox.bounds.left(), border_top),
             point(text_bounds.right(), border_top + separator_height),
@@ -736,7 +736,7 @@ pub(crate) fn render_buffer_header(
                 .pr_2()
                 .rounded_sm()
                 .gap_1p5()
-                .border_1()
+                .border_2()
                 .map(|border| {
                     let border_color =
                         if is_selected && is_folded && focus_handle.contains_focused(window, cx) {

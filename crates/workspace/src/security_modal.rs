@@ -120,7 +120,7 @@ impl Render for SecurityModal {
                     .gap_1()
                     .rounded_t_md()
                     .bg(cx.theme().colors().editor_background.opacity(0.5))
-                    .border_b_1()
+                    .border_b_2()
                     .border_color(cx.theme().colors().border_variant)
                     .child(
                         h_flex()

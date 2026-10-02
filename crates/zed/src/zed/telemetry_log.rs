@@ -358,7 +358,7 @@ impl TelemetryLogView {
             .items_start()
             .text_size(base_size)
             .border_color(border_color)
-            .border_b_1()
+            .border_b_2()
             .hover(|this| this.bg(element_background.opacity(0.5)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.expanded.contains(&event_index) {

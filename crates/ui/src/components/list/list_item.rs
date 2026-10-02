@@ -310,7 +310,7 @@ impl RenderOnce for ListItem {
             })
             .when(!self.inset, |this| {
                 this.when_some(self.focused, |this, focused| {
-                    this.border_1()
+                    this.border_2()
                         .when_some(self.dock, |this, dock| match dock {
                             DockSide::Left => this.border_l_2(),
                             DockSide::Right => this.border_r_2(),
@@ -370,10 +370,10 @@ impl RenderOnce for ListItem {
                     .when(self.inset, |this| {
                         this.when_some(self.focused, |this, focused| {
                             if focused && !self.disabled {
-                                this.border_1()
+                                this.border_2()
                                     .border_color(cx.theme().colors().border_focused)
                             } else {
-                                this.border_1()
+                                this.border_2()
                             }
                         })
                         .when(self.selectable && !self.disabled, |this| {
@@ -389,7 +389,7 @@ impl RenderOnce for ListItem {
                         |this, on_click| this.cursor_pointer().on_click(on_click),
                     )
                     .when(self.outlined, |this| {
-                        this.border_1()
+                        this.border_2()
                             .border_color(cx.theme().colors().border)
                             .rounded_sm()
                             .overflow_hidden()

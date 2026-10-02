@@ -196,7 +196,7 @@ impl Render for MigrationBanner {
             .pr_1()
             .justify_between()
             .bg(cx.theme().status().info_background.opacity(0.6))
-            .border_1()
+            .border_2()
             .border_color(cx.theme().colors().border_variant)
             .rounded_sm()
             .child(

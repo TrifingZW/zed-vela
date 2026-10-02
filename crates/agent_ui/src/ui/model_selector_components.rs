@@ -33,7 +33,7 @@ impl RenderOnce for ModelSelectorHeader {
             .when(self.has_border, |this| {
                 this.mt_1()
                     .pt_2()
-                    .border_t_1()
+                    .border_t_2()
                     .border_color(cx.theme().colors().border_variant)
             })
             .child(
@@ -235,7 +235,7 @@ impl RenderOnce for ModelSelectorFooter {
         h_flex()
             .w_full()
             .p_1p5()
-            .border_t_1()
+            .border_t_2()
             .border_color(cx.theme().colors().border_variant)
             .child(
                 Button::new("configure", "Configure")
@@ -286,7 +286,7 @@ impl RenderOnce for ModelSelectorTooltip {
                     h_flex()
                         .pt_1()
                         .gap_2()
-                        .border_t_1()
+                        .border_t_2()
                         .border_color(cx.theme().colors().border_variant)
                         .justify_between()
                         .child(Label::new("Cycle Favorite Models"))

@@ -1152,18 +1152,31 @@ ui_input = { codegen-units = 1 }
 zed_actions = { codegen-units = 1 }
 
 [profile.release]
-debug = "limited"
-lto = "thin"
+# Zed Vela: Maximum Optimization
+opt-level = 3
+# Zed Vela: full LTO for runtime performance (significantly slower to link).
+lto = "fat"
 codegen-units = 1
+# Zed Vela: no unwinding. Note that release dev tools (remote_server) can no longer
+# catch panics, and backtraces lose their unwind frames.
+panic = "abort"
+# Zed Vela: Strip
+strip = "symbols"
+# Zed Vela: Debug
+debug = "none"
 
 [profile.release.package]
-zed = { codegen-units = 16 }
+# Zed Vela: prefer runtime performance over rebuild speed for the main binary.
+zed = { codegen-units = 1 }
 
 [profile.release-fast]
 inherits = "release"
 debug = "full"
 lto = false
 codegen-units = 16
+# Zed Vela: the test harness requires unwinding, so perf-test runs cannot inherit
+# the abort strategy from `release`.
+panic = "unwind"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow" }

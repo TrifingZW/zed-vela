@@ -62,3 +62,12 @@ crates/docs_preprocessor/actions.json
 
 .local*
 .cache
+
+# Windows bundler scratch: script/bundle-windows.ps1 downloads the AMD AGS SDK
+# and Microsoft's ConPTY into the repo root and stages the installer under inno/.
+# Upstream CI runners are ephemeral, so these never needed ignoring there.
+/AGS_SDK*.zip
+/AGS_SDK-*/
+/Microsoft.Windows.Console.ConPTY*.nupkg
+/conpty/
+/inno/

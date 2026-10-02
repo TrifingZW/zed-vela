@@ -40,8 +40,34 @@ function Get-VSArch {
     }
 }
 
+# Zed Vela: locate the installed Visual Studio instead of assuming VS 2022 Community,
+# so any edition, year or install location works.
+function Get-VsDevShellPath {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+
+    if (Test-Path $vswhere) {
+        $queries = @(
+            # Prefer an install that actually has the C++ build tools.
+            @("-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"),
+            @("-latest", "-products", "*", "-property", "installationPath")
+        )
+
+        foreach ($query in $queries) {
+            $installPath = try { & $vswhere @query 2>$null | Select-Object -First 1 } catch { $null }
+            if ($installPath) {
+                $devShell = Join-Path $installPath "Common7\Tools\Launch-VsDevShell.ps1"
+                if (Test-Path $devShell) {
+                    return $devShell
+                }
+            }
+        }
+    }
+
+    throw "Launch-VsDevShell.ps1 not found. Install Visual Studio (or Build Tools) with the 'Desktop development with C++' workload."
+}
+
 Push-Location
-& "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
+& (Get-VsDevShellPath) -Arch (Get-VSArch -Arch $Architecture) -HostArch (Get-VSArch -Arch $OSArchitecture)
 Pop-Location
 
 $target = "$Architecture-pc-windows-msvc"
@@ -157,13 +183,20 @@ function BuildRemoteServer {
 }
 
 function ZipZedAndItsFriendsDebug {
+    # The release profile may disable debug info (`debug = "none"`), in which case none
+    # of these exist. Filter them out so a missing .pdb cannot abort the bundle.
     $items = @(
         ".\$CargoOutDir\zed.pdb",
         ".\$CargoOutDir\cli.pdb",
         ".\$CargoOutDir\auto_update_helper.pdb",
         ".\$CargoOutDir\explorer_command_injector.pdb",
         ".\$CargoOutDir\remote_server.pdb"
-    )
+    ) | Where-Object { Test-Path $_ }
+
+    if ($items.Count -eq 0) {
+        Write-Output "No .pdb files found, skipping debug archive"
+        return
+    }
 
     Compress-Archive -Path $items -DestinationPath ".\$CargoOutDir\zed-$env:RELEASE_VERSION-$env:ZED_RELEASE_CHANNEL.dbg.zip" -Force
 }
@@ -263,6 +296,27 @@ function CollectFiles {
     }
 }
 
+# Zed Vela: discover ISCC.exe instead of assuming Inno Setup 6 lives at a fixed path.
+function Get-InnoSetupPath {
+    $fromPath = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+    if ($fromPath) {
+        return $fromPath.Source
+    }
+
+    $candidates = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 5\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "ISCC.exe not found. Install Inno Setup 6 (winget install -e --id JRSoftware.InnoSetup) and re-run."
+}
+
 function BuildInstaller {
     $issFilePath = "$innoDir\zed.iss"
     switch ($channel) {
@@ -328,10 +382,7 @@ function BuildInstaller {
         }
     }
 
-    # Windows runner 2022 default has iscc in PATH, https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
-    # Currently, we are using Windows 2022 runner.
-    # Windows runner 2025 doesn't have iscc in PATH for now, https://github.com/actions/runner-images/issues/11228
-    $innoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    $innoSetupPath = Get-InnoSetupPath
 
     $definitions = @{
         "AppId"          = $appId

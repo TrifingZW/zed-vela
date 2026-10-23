@@ -12586,8 +12586,10 @@ impl ThreadView {
 
         v_flex()
             .w_full()
-            .border_t_1()
-            .when(is_canceled_or_failed, |this| this.border_dashed())
+            .border_t_2()
+            .when(state.status.is_failed_or_canceled(), |this| {
+                this.border_dashed()
+            })
             .border_color(self.tool_card_border_color(cx))
             .overflow_hidden()
             .child(

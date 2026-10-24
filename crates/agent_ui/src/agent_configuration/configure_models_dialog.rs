@@ -16,15 +16,16 @@ use gpui::{
     Subscription, prelude::*,
 };
 use language_model::{
-    ApiKeyConfiguration, CreateProviderSettingsView, IconOrSvg, InlineDescription,
-    LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry, ModelMode,
-    ProviderSettingsView,
+    ApiKeyConfiguration, AuthenticateError, CreateProviderSettingsView, IconOrSvg,
+    InlineDescription, LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry,
+    ModelMode, ProviderSettingsView,
 };
+use language_models::AllLanguageModelSettings;
 use settings::{
     AnthropicCompatibleAvailableModel, AnthropicCompatibleModelCapabilities,
     AnthropicCompatibleSettingsContent, OpenAiCompatibleAvailableModel,
     OpenAiCompatibleModelCapabilities, OpenAiCompatibleSettingsContent, OpenAiReasoningEffort,
-    SettingsStore,
+    Settings as _, SettingsStore,
 };
 use ui::{
     ButtonLink, Checkbox, ConfiguredApiCard, ContextMenu, Divider, DividerColor, DropdownMenu,
@@ -37,20 +38,25 @@ use workspace::{DismissDecision, ModalView, Workspace};
 enum Mode {
     /// The provider list, mirroring the LLM Providers settings page.
     List,
-    /// A provider's own configuration, which the settings page opens as a sub-page.
-    ProviderConfig {
-        provider_id: LanguageModelProviderId,
-    },
-    /// The "Compatible APIs" form, which the settings page opens as a sub-page.
-    AddProvider(Box<LlmProviderForm>),
+    /// A provider that renders its own configuration sub-page.
+    UpstreamProvider(LanguageModelProviderId),
+    /// Creating a compatible provider, or editing one that is defined in settings.
+    Form(Box<LlmProviderForm>),
+}
+
+struct FormRenderMode {
+    kind: CompatibleProviderKind,
+    /// `Some` when editing an existing provider.
+    provider_id: Option<LanguageModelProviderId>,
+    confirming_remove: bool,
 }
 
 /// A snapshot of the mode used while rendering, so building the view can borrow
 /// `self` mutably for listeners.
 enum RenderMode {
     List,
-    ProviderConfig(LanguageModelProviderId),
-    AddProvider(CompatibleProviderKind),
+    UpstreamProvider(LanguageModelProviderId),
+    Form(FormRenderMode),
 }
 
 pub(crate) struct ConfigureModelsDialog {
@@ -125,14 +131,42 @@ impl CompatibleProviderKind {
     }
 }
 
+/// Returns the kind of compatible provider defined by `provider_id` in the
+/// merged settings, if it is one.
+fn compatible_provider_kind(
+    provider_id: &LanguageModelProviderId,
+    cx: &App,
+) -> Option<CompatibleProviderKind> {
+    let settings = AllLanguageModelSettings::get_global(cx);
+    if settings
+        .openai_compatible
+        .contains_key(provider_id.0.as_str())
+    {
+        Some(CompatibleProviderKind::OpenAi)
+    } else if settings
+        .anthropic_compatible
+        .contains_key(provider_id.0.as_str())
+    {
+        Some(CompatibleProviderKind::Anthropic)
+    } else {
+        None
+    }
+}
+
 struct LlmProviderForm {
     kind: CompatibleProviderKind,
+    /// `Some` when editing an existing provider, whose name cannot be changed.
+    editing: Option<LanguageModelProviderId>,
+    /// The API URL that the existing API key is stored under.
+    original_api_url: Option<String>,
     provider_name: Entity<Editor>,
     api_url: Entity<Editor>,
     api_key: Entity<Editor>,
     custom_headers: Vec<HeaderInput>,
     models: Vec<ModelInput>,
     error: Option<SharedString>,
+    /// Whether the user is being asked to confirm removing the edited provider.
+    confirming_remove: bool,
 }
 
 struct HeaderInput {
@@ -144,6 +178,8 @@ impl LlmProviderForm {
     fn new(kind: CompatibleProviderKind, window: &mut Window, cx: &mut App) -> Self {
         Self {
             kind,
+            editing: None,
+            original_api_url: None,
             provider_name: new_input(kind.label(), None, false, window, cx),
             api_url: new_input(kind.default_api_url(), None, false, window, cx),
             api_key: new_input(
@@ -156,7 +192,73 @@ impl LlmProviderForm {
             custom_headers: Vec::new(),
             models: vec![ModelInput::new(window, cx)],
             error: None,
+            confirming_remove: false,
         }
+    }
+
+    /// Builds a form pre-filled from the settings of an existing compatible provider.
+    fn editing(
+        provider_id: LanguageModelProviderId,
+        kind: CompatibleProviderKind,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Self> {
+        let (api_url, custom_headers, configured_models) = {
+            let settings = AllLanguageModelSettings::get_global(cx);
+            match kind {
+                CompatibleProviderKind::OpenAi => {
+                    let settings = settings.openai_compatible.get(provider_id.0.as_ref())?;
+                    (
+                        settings.api_url.clone(),
+                        settings.custom_headers.clone(),
+                        ParsedModels::OpenAi(settings.available_models.clone()),
+                    )
+                }
+                CompatibleProviderKind::Anthropic => {
+                    let settings = settings.anthropic_compatible.get(provider_id.0.as_ref())?;
+                    (
+                        settings.api_url.clone(),
+                        settings.custom_headers.clone(),
+                        ParsedModels::Anthropic(settings.available_models.clone()),
+                    )
+                }
+            }
+        };
+
+        let mut form = Self::new(kind, window, cx);
+        form.editing = Some(provider_id.clone());
+        form.original_api_url = Some(api_url.clone());
+        form.provider_name.update(cx, |editor, cx| {
+            editor.set_text(provider_id.0.to_string(), window, cx);
+            editor.set_read_only(true);
+        });
+        form.api_url.update(cx, |editor, cx| {
+            editor.set_text(api_url, window, cx);
+        });
+        form.api_key.update(cx, |editor, cx| {
+            editor.set_placeholder_text("Leave empty to keep the current API key", window, cx);
+        });
+        form.custom_headers = custom_headers
+            .iter()
+            .filter_map(|(name, value)| {
+                let value = value.to_str().ok()?;
+                Some(HeaderInput {
+                    name: new_input(name.as_str(), Some(name.as_str()), false, window, cx),
+                    value: new_input("value", Some(value), false, window, cx),
+                })
+            })
+            .collect();
+        form.models = match configured_models {
+            ParsedModels::OpenAi(models) => models
+                .iter()
+                .map(|model| ModelInput::from_open_ai(model, window, cx))
+                .collect(),
+            ParsedModels::Anthropic(models) => models
+                .iter()
+                .map(|model| ModelInput::from_anthropic(model, window, cx))
+                .collect(),
+        };
+        Some(form)
     }
 }
 
@@ -203,6 +305,118 @@ impl ModelModeInput {
 }
 
 impl ModelInput {
+    fn from_open_ai(
+        model: &OpenAiCompatibleAvailableModel,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
+        let mut input = Self::new(window, cx);
+        input.name.update(cx, |editor, cx| {
+            editor.set_text(model.name.clone(), window, cx)
+        });
+        input.display_name.update(cx, |editor, cx| {
+            editor.set_text(model.display_name.clone().unwrap_or_default(), window, cx);
+        });
+        input.max_completion_tokens.update(cx, |editor, cx| {
+            editor.set_text(
+                model
+                    .max_completion_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+        input.max_output_tokens.update(cx, |editor, cx| {
+            editor.set_text(
+                model
+                    .max_output_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+        input.max_tokens.update(cx, |editor, cx| {
+            editor.set_text(model.max_tokens.to_string(), window, cx);
+        });
+        input.reasoning_effort = model
+            .reasoning_effort
+            .unwrap_or(OpenAiReasoningEffort::Medium);
+        input.supports_thinking = model.reasoning_effort.is_some().into();
+        input.supports_tools = model.capabilities.tools.into();
+        input.supports_images = model.capabilities.images.into();
+        input.supports_parallel_tool_calls = model.capabilities.parallel_tool_calls.into();
+        input.supports_prompt_cache_key = model.capabilities.prompt_cache_key.into();
+        input.supports_chat_completions = model.capabilities.chat_completions.into();
+        input.interleaved_reasoning = model.capabilities.interleaved_reasoning.into();
+        input.max_tokens_parameter = model.capabilities.max_tokens_parameter.into();
+        input
+    }
+
+    fn from_anthropic(
+        model: &AnthropicCompatibleAvailableModel,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
+        let mut input = Self::new(window, cx);
+        input.name.update(cx, |editor, cx| {
+            editor.set_text(model.name.clone(), window, cx)
+        });
+        input.display_name.update(cx, |editor, cx| {
+            editor.set_text(model.display_name.clone().unwrap_or_default(), window, cx);
+        });
+        input.max_tokens.update(cx, |editor, cx| {
+            editor.set_text(model.max_tokens.to_string(), window, cx);
+        });
+        input.max_output_tokens.update(cx, |editor, cx| {
+            editor.set_text(
+                model
+                    .max_output_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+        input.tool_override.update(cx, |editor, cx| {
+            editor.set_text(model.tool_override.clone().unwrap_or_default(), window, cx);
+        });
+        input.default_temperature.update(cx, |editor, cx| {
+            editor.set_text(
+                model
+                    .default_temperature
+                    .map(|temperature| temperature.to_string())
+                    .unwrap_or_default(),
+                window,
+                cx,
+            );
+        });
+        input.extra_beta_headers.update(cx, |editor, cx| {
+            editor.set_text(model.extra_beta_headers.join(", "), window, cx);
+        });
+
+        let mode = model.mode.unwrap_or_default();
+        input.mode = match &mode {
+            ModelMode::Default => ModelModeInput::Default,
+            ModelMode::Thinking { .. } => ModelModeInput::Thinking,
+            ModelMode::Adaptive => ModelModeInput::Adaptive,
+        };
+        input.thinking_budget_tokens.update(cx, |editor, cx| {
+            let budget = match &mode {
+                ModelMode::Thinking { budget_tokens } => budget_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            editor.set_text(budget, window, cx);
+        });
+        input.supports_tools = model.capabilities.tools.into();
+        input.supports_images = model.capabilities.images.into();
+        input.supports_prompt_caching = model.capabilities.prompt_caching.into();
+        input
+    }
+
     fn new(window: &mut Window, cx: &mut App) -> Self {
         let OpenAiCompatibleModelCapabilities {
             tools,
@@ -314,13 +528,23 @@ impl ConfigureModelsDialog {
     fn render_mode(&self) -> RenderMode {
         match &self.mode {
             Mode::List => RenderMode::List,
-            Mode::ProviderConfig { provider_id } => RenderMode::ProviderConfig(provider_id.clone()),
-            Mode::AddProvider(form) => RenderMode::AddProvider(form.kind),
+            Mode::UpstreamProvider(provider_id) => {
+                RenderMode::UpstreamProvider(provider_id.clone())
+            }
+            Mode::Form(form) => RenderMode::Form(FormRenderMode {
+                kind: form.kind,
+                provider_id: form.editing.clone(),
+                confirming_remove: form.confirming_remove,
+            }),
         }
     }
 
     fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
         self.mode = mode;
+        self.scroll_handle.set_offset(gpui::Point {
+            x: px(0.0),
+            y: px(0.0),
+        });
         self.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -345,7 +569,17 @@ impl ConfigureModelsDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_mode(Mode::ProviderConfig { provider_id }, window, cx);
+        // Compatible providers are defined entirely by their settings entry, so
+        // they get the same full form used to create them instead of upstream's
+        // API-key-only configuration view.
+        if let Some(kind) = compatible_provider_kind(&provider_id, cx)
+            && let Some(form) = LlmProviderForm::editing(provider_id.clone(), kind, window, cx)
+        {
+            self.set_mode(Mode::Form(Box::new(form)), window, cx);
+            return;
+        }
+
+        self.set_mode(Mode::UpstreamProvider(provider_id), window, cx);
     }
 
     fn open_add_provider_form(
@@ -355,7 +589,7 @@ impl ConfigureModelsDialog {
         cx: &mut Context<Self>,
     ) {
         let form = Box::new(LlmProviderForm::new(kind, window, cx));
-        self.set_mode(Mode::AddProvider(form), window, cx);
+        self.set_mode(Mode::Form(form), window, cx);
     }
 
     fn configuration_view(
@@ -774,27 +1008,24 @@ impl ConfigureModelsDialog {
                                     .log_err();
                             }
                         })
-                        .entry("Anthropic", None, {
-                            let dialog = dialog.clone();
-                            move |window, cx| {
-                                dialog
-                                    .update(cx, |this, cx| {
-                                        this.open_add_provider_form(
-                                            CompatibleProviderKind::Anthropic,
-                                            window,
-                                            cx,
-                                        );
-                                    })
-                                    .log_err();
-                            }
+                        .entry("Anthropic", None, move |window, cx| {
+                            dialog
+                                .update(cx, |this, cx| {
+                                    this.open_add_provider_form(
+                                        CompatibleProviderKind::Anthropic,
+                                        window,
+                                        cx,
+                                    );
+                                })
+                                .log_err();
                         })
                 }))
             })
     }
 
-    // -- Provider configuration sub-page ------------------------------------
+    // -- Upstream provider sub-page -----------------------------------------
 
-    fn render_provider_config(
+    fn render_upstream_provider(
         &mut self,
         provider_id: &LanguageModelProviderId,
         window: &mut Window,
@@ -827,16 +1058,14 @@ impl ConfigureModelsDialog {
         v_flex().w_full().min_w_0().child(view).into_any_element()
     }
 
-    // -- Add provider form --------------------------------------------------
+    // -- Compatible provider form -------------------------------------------
 
-    fn render_add_provider_form(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Mode::AddProvider(form) = &self.mode else {
+    fn render_provider_form(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Mode::Form(form) = &self.mode else {
             return div().into_any_element();
         };
+        let editing = form.editing.is_some();
+        let reset_api_key = editing.then(|| self.render_reset_api_key_button(cx));
 
         v_flex()
             .w_full()
@@ -846,9 +1075,13 @@ impl ConfigureModelsDialog {
             .child(Divider::horizontal().flex_shrink_0())
             .child(render_form_field(
                 "Provider Name",
-                "A unique name used to identify this provider.",
+                if editing {
+                    "Provider names cannot be changed after creation."
+                } else {
+                    "A unique name used to identify this provider."
+                },
                 &form.provider_name,
-                true,
+                !editing,
                 cx,
             ))
             .child(render_form_field(
@@ -860,11 +1093,23 @@ impl ConfigureModelsDialog {
             ))
             .child(render_form_field(
                 "API Key",
-                "Stored in the system keychain, not in settings.json.",
+                if editing {
+                    "Leave empty to keep the current key. Changing the API URL requires entering the key again."
+                } else {
+                    "Stored in the system keychain, not in settings.json."
+                },
                 &form.api_key,
-                true,
+                !editing,
                 cx,
             ))
+            .when_some(reset_api_key, |this, reset_api_key| {
+                this.child(
+                    h_flex()
+                        .w_full()
+                        .justify_end()
+                        .child(reset_api_key),
+                )
+            })
             .child(render_custom_headers(form, cx))
             .child(render_models_section(form, window, cx))
             .when_some(form.error.clone(), |this, error| {
@@ -873,13 +1118,40 @@ impl ConfigureModelsDialog {
             .into_any_element()
     }
 
-    fn save_add_provider_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn render_reset_api_key_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("reset-provider-api-key", "Reset API Key")
+            .style(ButtonStyle::Outlined)
+            .label_size(LabelSize::Small)
+            .tooltip(Tooltip::text(
+                "Removes the stored key. Keys supplied through environment variables must be unset there instead.",
+            ))
+            .on_click(cx.listener(|this, _, window, cx| {
+                let Mode::Form(form) = &mut this.mode else {
+                    return;
+                };
+                form.api_key
+                    .update(cx, |editor, cx| editor.set_text("", window, cx));
+                let Some(provider_id) = &form.editing else {
+                    return;
+                };
+                let Some(provider) = LanguageModelRegistry::read_global(cx).provider(provider_id)
+                else {
+                    return;
+                };
+                provider.set_api_key(None, cx).detach_and_log_err(cx);
+            }))
+            .into_any_element()
+    }
+
+    fn save_provider_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let values = {
-            let Mode::AddProvider(form) = &self.mode else {
+            let Mode::Form(form) = &self.mode else {
                 return;
             };
             LlmProviderFormValues {
                 kind: form.kind,
+                editing: form.editing.clone(),
+                original_api_url: form.original_api_url.clone(),
                 provider_name: form.provider_name.read(cx).text(cx),
                 api_url: form.api_url.read(cx).text(cx),
                 api_key: form.api_key.read(cx).text(cx),
@@ -926,7 +1198,7 @@ impl ConfigureModelsDialog {
             match validate_llm_provider_form(&values, cx) {
                 Ok(value) => value,
                 Err(error) => {
-                    if let Mode::AddProvider(form) = &mut self.mode {
+                    if let Mode::Form(form) = &mut self.mode {
                         form.error = Some(error);
                     }
                     cx.notify();
@@ -949,9 +1221,9 @@ impl ConfigureModelsDialog {
                                     .insert(
                                         Arc::from(provider_name.as_str()),
                                         OpenAiCompatibleSettingsContent {
-                                            api_url: api_url.clone(),
+                                            api_url,
                                             available_models,
-                                            custom_headers: custom_headers.clone(),
+                                            custom_headers,
                                         },
                                     );
                             }
@@ -962,9 +1234,9 @@ impl ConfigureModelsDialog {
                                     .insert(
                                         Arc::from(provider_name.as_str()),
                                         AnthropicCompatibleSettingsContent {
-                                            api_url: api_url.clone(),
+                                            api_url,
                                             available_models,
-                                            custom_headers: custom_headers.clone(),
+                                            custom_headers,
                                         },
                                     );
                             }
@@ -976,13 +1248,29 @@ impl ConfigureModelsDialog {
                     .await
                     .map_err(|_| anyhow::anyhow!("Settings update was canceled"))??;
 
-                let set_api_key = cx.update(|_window, cx| {
-                    let provider = LanguageModelRegistry::read_global(cx)
-                        .provider(&provider_id)
-                        .ok_or_else(|| anyhow::anyhow!("Provider was not registered"))?;
-                    anyhow::Ok(provider.set_api_key(Some(api_key), cx))
-                })??;
-                set_api_key.await?;
+                if !api_key.is_empty() {
+                    let provider = cx.update(|_window, cx| {
+                        LanguageModelRegistry::read_global(cx)
+                            .provider(&provider_id)
+                            .ok_or_else(|| anyhow::anyhow!("Provider was not registered"))
+                    })??;
+
+                    // Wait for any keychain lookup started by an API URL change so
+                    // that it cannot overwrite the key stored below.
+                    match cx.update(|_window, cx| provider.authenticate(cx))?.await {
+                        Ok(()) | Err(AuthenticateError::CredentialsNotFound) => {}
+                        Err(error) => {
+                            log::error!(
+                                "Failed to load credentials for {}: {error}",
+                                provider_id.0
+                            );
+                        }
+                    }
+
+                    let set_api_key =
+                        cx.update(|_window, cx| provider.set_api_key(Some(api_key), cx))?;
+                    set_api_key.await?;
+                }
 
                 anyhow::Ok(provider_id)
             }
@@ -1001,7 +1289,7 @@ impl ConfigureModelsDialog {
                 }
                 Err(error) => {
                     this.update(cx, |this, cx| {
-                        if let Mode::AddProvider(form) = &mut this.mode {
+                        if let Mode::Form(form) = &mut this.mode {
                             form.error = Some(error.to_string().into());
                         }
                         cx.notify();
@@ -1014,21 +1302,73 @@ impl ConfigureModelsDialog {
         .detach_and_log_err(cx);
     }
 
+    fn remove_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Mode::Form(form) = &self.mode else {
+            return;
+        };
+        let Some(provider_id) = form.editing.clone() else {
+            return;
+        };
+
+        let provider = LanguageModelRegistry::read_global(cx).provider(&provider_id);
+
+        let provider_name = provider_id.0.clone();
+        let fs = <dyn fs::Fs>::global(cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let settings_update = cx.update(|_window, cx| {
+                settings::update_settings_file_with_completion(fs, cx, move |settings, _cx| {
+                    let Some(language_models) = settings.language_models.as_mut() else {
+                        return;
+                    };
+                    if let Some(providers) = language_models.openai_compatible.as_mut() {
+                        providers.remove(provider_name.as_str());
+                    }
+                    if let Some(providers) = language_models.anthropic_compatible.as_mut() {
+                        providers.remove(provider_name.as_str());
+                    }
+                })
+            })?;
+
+            settings_update
+                .await
+                .map_err(|_| anyhow::anyhow!("Settings update was canceled"))??;
+
+            // Only discard the stored key once the provider is actually gone from
+            // settings, so a failed update cannot leave it unusable.
+            if let Some(provider) = provider {
+                let reset_api_key = cx.update(|_window, cx| provider.set_api_key(None, cx))?;
+                reset_api_key.await.log_err();
+            }
+
+            cx.update(|window, cx| {
+                this.update(cx, |this, cx| {
+                    this.provider_views.remove(&provider_id);
+                    this.set_mode(Mode::List, window, cx);
+                })
+            })??;
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
     // -- Chrome -------------------------------------------------------------
 
     fn render_header(&self, mode: &RenderMode, cx: &App) -> ModalHeader {
         match mode {
             RenderMode::List => ModalHeader::new().headline("Configure Models"),
-            RenderMode::ProviderConfig(provider_id) => {
+            RenderMode::UpstreamProvider(provider_id) => {
                 let provider_name = LanguageModelRegistry::read_global(cx)
                     .provider(provider_id)
                     .map(|provider| provider.name().0)
                     .unwrap_or_else(|| provider_id.0.clone());
                 ModalHeader::new().headline(provider_name)
             }
-            RenderMode::AddProvider(kind) => {
-                ModalHeader::new().headline(format!("Add {}-Compatible Provider", kind.label()))
-            }
+            RenderMode::Form(form) => match &form.provider_id {
+                Some(provider_id) => ModalHeader::new().headline(provider_id.0.clone()),
+                None => ModalHeader::new()
+                    .headline(format!("Add {}-Compatible Provider", form.kind.label())),
+            },
         }
     }
 
@@ -1046,7 +1386,7 @@ impl ConfigureModelsDialog {
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     ),
                 ),
-            RenderMode::ProviderConfig(_) => ModalFooter::new().end_slot(
+            RenderMode::UpstreamProvider(_) => ModalFooter::new().end_slot(
                 h_flex()
                     .gap_2()
                     .child(
@@ -1059,22 +1399,89 @@ impl ConfigureModelsDialog {
                             .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                     ),
             ),
-            RenderMode::AddProvider(_) => ModalFooter::new().end_slot(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("cancel-add-provider", "Cancel")
-                            .key_binding(cancel_binding)
-                            .on_click(cx.listener(|this, _, window, cx| this.go_back(window, cx))),
-                    )
-                    .child(
-                        Button::new("save-add-provider", "Save Provider")
+            RenderMode::Form(form) => {
+                let mut footer = ModalFooter::new();
+                if form.provider_id.is_some() {
+                    footer = footer
+                        .start_slot(self.render_remove_provider_button(form.confirming_remove, cx));
+                }
+                footer.end_slot(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel-provider-form", "Cancel")
+                                .key_binding(cancel_binding)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.go_back(window, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new(
+                                "save-provider-form",
+                                if form.provider_id.is_some() {
+                                    "Save Changes"
+                                } else {
+                                    "Save Provider"
+                                },
+                            )
                             .style(ButtonStyle::Filled)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_add_provider_form(window, cx);
-                            })),
-                    ),
-            ),
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.save_provider_form(window, cx);
+                                },
+                            )),
+                        ),
+                )
+            }
+        }
+    }
+
+    fn render_remove_provider_button(
+        &self,
+        confirming: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if confirming {
+            h_flex()
+                .gap_2()
+                .child(
+                    Label::new("Remove this provider?")
+                        .size(LabelSize::Small)
+                        .color(Color::Error),
+                )
+                .child(
+                    Button::new("cancel-remove-provider", "Keep")
+                        .style(ButtonStyle::Outlined)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Mode::Form(form) = &mut this.mode {
+                                form.confirming_remove = false;
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("confirm-remove-provider", "Remove")
+                        .style(ButtonStyle::Tinted(ui::TintColor::Error))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.remove_provider(window, cx);
+                        })),
+                )
+                .into_any_element()
+        } else {
+            Button::new("remove-provider", "Remove Provider")
+                .style(ButtonStyle::Outlined)
+                .start_icon(
+                    Icon::new(IconName::Trash)
+                        .size(IconSize::Small)
+                        .color(Color::Muted),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Mode::Form(form) = &mut this.mode {
+                        form.confirming_remove = true;
+                    }
+                    cx.notify();
+                }))
+                .into_any_element()
         }
     }
 }
@@ -1111,11 +1518,11 @@ impl Render for ConfigureModelsDialog {
 
         let body = match &mode {
             RenderMode::List => self.render_list(window, cx),
-            RenderMode::ProviderConfig(provider_id) => {
+            RenderMode::UpstreamProvider(provider_id) => {
                 let provider_id = provider_id.clone();
-                self.render_provider_config(&provider_id, window, cx)
+                self.render_upstream_provider(&provider_id, window, cx)
             }
-            RenderMode::AddProvider(_) => self.render_add_provider_form(window, cx),
+            RenderMode::Form(_) => self.render_provider_form(window, cx),
         };
 
         div()
@@ -1126,6 +1533,14 @@ impl Render for ConfigureModelsDialog {
                 this.focus_handle.focus(window, cx);
             }))
             .on_action(cx.listener(|this, _: &menu::Cancel, window, cx| {
+                if let Mode::Form(form) = &mut this.mode
+                    && form.confirming_remove
+                {
+                    form.confirming_remove = false;
+                    cx.notify();
+                    return;
+                }
+
                 if matches!(this.mode, Mode::List) {
                     this.dismiss(cx);
                 } else {
@@ -1238,7 +1653,7 @@ fn render_custom_headers(
                         )
                         .label_size(LabelSize::Small)
                         .on_click(cx.listener(|this, _, window, cx| {
-                            if let Mode::AddProvider(form) = &mut this.mode {
+                            if let Mode::Form(form) = &mut this.mode {
                                 form.custom_headers.push(HeaderInput {
                                     name: new_input("Header-Name", None, false, window, cx),
                                     value: new_input("value", None, false, window, cx),
@@ -1274,7 +1689,7 @@ fn render_custom_headers(
                                 .icon_size(IconSize::Small)
                                 .tooltip(Tooltip::text("Remove Header"))
                                 .on_click(cx.listener(move |this, _, _window, cx| {
-                                    if let Mode::AddProvider(form) = &mut this.mode
+                                    if let Mode::Form(form) = &mut this.mode
                                         && index < form.custom_headers.len()
                                     {
                                         form.custom_headers.remove(index);
@@ -1307,7 +1722,7 @@ fn render_models_section(
                         )
                         .label_size(LabelSize::Small)
                         .on_click(cx.listener(|this, _, window, cx| {
-                            if let Mode::AddProvider(form) = &mut this.mode {
+                            if let Mode::Form(form) = &mut this.mode {
                                 form.models.push(ModelInput::new(window, cx));
                             }
                             cx.notify();
@@ -1354,17 +1769,17 @@ fn render_model(
         .when(is_open_ai, |this| {
             this.child(render_form_field(
                 "Max Completion Tokens",
-                "Maximum completion tokens for OpenAI-compatible requests.",
+                "Maximum completion tokens for OpenAI-compatible requests. Leave empty for the provider default.",
                 &model.max_completion_tokens,
-                true,
+                false,
                 cx,
             ))
         })
         .child(render_form_field(
             "Max Output Tokens",
-            "The maximum number of tokens the model can output.",
+            "The maximum number of tokens the model can output. Leave empty for the provider default.",
             &model.max_output_tokens,
-            true,
+            false,
             cx,
         ))
         .child(render_form_field(
@@ -1420,7 +1835,7 @@ fn render_model(
                     .style(ButtonStyle::Outlined)
                     .full_width()
                     .on_click(cx.listener(move |this, _, _window, cx| {
-                        if let Mode::AddProvider(form) = &mut this.mode
+                        if let Mode::Form(form) = &mut this.mode
                             && index < form.models.len()
                         {
                             form.models.remove(index);
@@ -1542,7 +1957,7 @@ fn render_capability_checkbox(
     Checkbox::new((id, index), state)
         .label(label)
         .on_click(cx.listener(move |this, checked, _window, cx| {
-            if let Mode::AddProvider(form) = &mut this.mode
+            if let Mode::Form(form) = &mut this.mode
                 && let Some(model) = form.models.get_mut(index)
             {
                 update(model, *checked);
@@ -1568,7 +1983,7 @@ fn render_reasoning_effort_selector(
                     .handler(move |_window, cx| {
                         dialog
                             .update(cx, |this, cx| {
-                                if let Mode::AddProvider(form) = &mut this.mode
+                                if let Mode::Form(form) = &mut this.mode
                                     && let Some(model) = form.models.get_mut(index)
                                 {
                                     model.reasoning_effort = effort;
@@ -1615,7 +2030,7 @@ fn render_model_mode_selector(
                     .handler(move |_window, cx| {
                         dialog
                             .update(cx, |this, cx| {
-                                if let Mode::AddProvider(form) = &mut this.mode
+                                if let Mode::Form(form) = &mut this.mode
                                     && let Some(model) = form.models.get_mut(index)
                                 {
                                     model.mode = mode;
@@ -1664,6 +2079,8 @@ fn render_form_error(error: SharedString) -> impl IntoElement {
 
 struct LlmProviderFormValues {
     kind: CompatibleProviderKind,
+    editing: Option<LanguageModelProviderId>,
+    original_api_url: Option<String>,
     provider_name: String,
     api_url: String,
     api_key: String,
@@ -1712,30 +2129,42 @@ fn validate_llm_provider_form(
     ),
     SharedString,
 > {
-    let provider_name = values.provider_name.clone();
+    let provider_name = match &values.editing {
+        Some(provider_id) => provider_id.0.to_string(),
+        None => values.provider_name.trim().to_string(),
+    };
     if provider_name.is_empty() {
         return Err("Provider Name cannot be empty".into());
     }
 
-    if LanguageModelRegistry::read_global(cx)
-        .providers()
-        .iter()
-        .any(|provider| {
-            provider.id().0.as_ref() == provider_name.as_str()
-                || provider.name().0.as_ref() == provider_name.as_str()
-        })
+    if values.editing.is_none()
+        && LanguageModelRegistry::read_global(cx)
+            .providers()
+            .iter()
+            .any(|provider| {
+                provider.id().0.as_ref() == provider_name.as_str()
+                    || provider.name().0.as_ref() == provider_name.as_str()
+            })
     {
         return Err("Provider Name is already taken by another provider".into());
     }
 
-    let api_url = values.api_url.clone();
+    let api_url = values.api_url.trim().to_string();
     if api_url.is_empty() {
         return Err("API URL cannot be empty".into());
     }
 
-    let api_key = values.api_key.clone();
-    if api_key.is_empty() {
+    let api_key = values.api_key.trim().to_string();
+    if values.editing.is_none() && api_key.is_empty() {
         return Err("API Key cannot be empty".into());
+    }
+    // API keys are stored in the keychain per API URL, so a changed URL cannot
+    // reuse the existing key and the user has to provide it again.
+    if let Some(original_api_url) = &values.original_api_url
+        && api_key.is_empty()
+        && &api_url != original_api_url
+    {
+        return Err("API Key is required when changing the API URL".into());
     }
 
     let custom_headers = values
@@ -1792,14 +2221,11 @@ fn parse_open_ai_model(
     Ok(OpenAiCompatibleAvailableModel {
         name: parse_model_name(model)?,
         display_name: parse_optional_text(&model.display_name),
-        max_completion_tokens: Some(parse_u64_field(
+        max_completion_tokens: parse_optional_u64(
             &model.max_completion_tokens,
             "Max Completion Tokens",
-        )?),
-        max_output_tokens: Some(parse_u64_field(
-            &model.max_output_tokens,
-            "Max Output Tokens",
-        )?),
+        )?,
+        max_output_tokens: parse_optional_u64(&model.max_output_tokens, "Max Output Tokens")?,
         max_tokens: parse_u64_field(&model.max_tokens, "Max Tokens")?,
         reasoning_effort: model.supports_thinking.then_some(model.reasoning_effort),
         capabilities: OpenAiCompatibleModelCapabilities {
@@ -1824,10 +2250,7 @@ fn parse_anthropic_model(
         display_name: parse_optional_text(&model.display_name),
         max_tokens: parse_u64_field(&model.max_tokens, "Max Tokens")?,
         tool_override: parse_optional_text(&model.tool_override),
-        max_output_tokens: Some(parse_u64_field(
-            &model.max_output_tokens,
-            "Max Output Tokens",
-        )?),
+        max_output_tokens: parse_optional_u64(&model.max_output_tokens, "Max Output Tokens")?,
         default_temperature: parse_optional_f32(&model.default_temperature, "Default Temperature")?,
         extra_beta_headers: parse_list(&model.extra_beta_headers),
         mode: match model.mode {
@@ -1882,6 +2305,17 @@ fn parse_list(value: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn parse_optional_u64(value: &str, name: &str) -> Result<Option<u64>, SharedString> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| format!("{name} must be a number").into())
 }
 
 fn parse_u64_field(value: &str, name: &str) -> Result<u64, SharedString> {

@@ -17,7 +17,8 @@ use gpui::{
 };
 use language_model::{
     ApiKeyConfiguration, CreateProviderSettingsView, IconOrSvg, InlineDescription,
-    LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry, ProviderSettingsView,
+    LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry, ModelMode,
+    ProviderSettingsView,
 };
 use settings::{
     AnthropicCompatibleAvailableModel, AnthropicCompatibleModelCapabilities,
@@ -28,7 +29,7 @@ use settings::{
 use ui::{
     ButtonLink, Checkbox, ConfiguredApiCard, ContextMenu, Divider, DividerColor, DropdownMenu,
     DropdownStyle, IconPosition, KeyBinding, Modal, ModalFooter, ModalHeader, PopoverMenu,
-    ToggleState, prelude::*,
+    ToggleState, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::{DismissDecision, ModalView, Workspace};
@@ -129,8 +130,14 @@ struct LlmProviderForm {
     provider_name: Entity<Editor>,
     api_url: Entity<Editor>,
     api_key: Entity<Editor>,
+    custom_headers: Vec<HeaderInput>,
     models: Vec<ModelInput>,
     error: Option<SharedString>,
+}
+
+struct HeaderInput {
+    name: Entity<Editor>,
+    value: Entity<Editor>,
 }
 
 impl LlmProviderForm {
@@ -146,6 +153,7 @@ impl LlmProviderForm {
                 window,
                 cx,
             ),
+            custom_headers: Vec::new(),
             models: vec![ModelInput::new(window, cx)],
             error: None,
         }
@@ -154,10 +162,16 @@ impl LlmProviderForm {
 
 struct ModelInput {
     name: Entity<Editor>,
+    display_name: Entity<Editor>,
     max_completion_tokens: Entity<Editor>,
     max_output_tokens: Entity<Editor>,
     max_tokens: Entity<Editor>,
     reasoning_effort: OpenAiReasoningEffort,
+    tool_override: Entity<Editor>,
+    default_temperature: Entity<Editor>,
+    extra_beta_headers: Entity<Editor>,
+    mode: ModelModeInput,
+    thinking_budget_tokens: Entity<Editor>,
     supports_tools: ToggleState,
     supports_images: ToggleState,
     supports_parallel_tool_calls: ToggleState,
@@ -166,6 +180,26 @@ struct ModelInput {
     supports_thinking: ToggleState,
     interleaved_reasoning: ToggleState,
     max_tokens_parameter: ToggleState,
+    supports_prompt_caching: ToggleState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelModeInput {
+    Default,
+    Thinking,
+    Adaptive,
+}
+
+impl ModelModeInput {
+    const SELECTABLE: [Self; 3] = [Self::Default, Self::Thinking, Self::Adaptive];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Thinking => "Thinking",
+            Self::Adaptive => "Adaptive",
+        }
+    }
 }
 
 impl ModelInput {
@@ -188,10 +222,16 @@ impl ModelInput {
                 window,
                 cx,
             ),
+            display_name: new_input("e.g. GPT-5", None, false, window, cx),
             max_completion_tokens: new_input("200000", Some("200000"), false, window, cx),
             max_output_tokens: new_input("Max Output Tokens", Some("32000"), false, window, cx),
             max_tokens: new_input("Max Tokens", Some("200000"), false, window, cx),
             reasoning_effort: OpenAiReasoningEffort::Medium,
+            tool_override: new_input("Model name to use for tool calls", None, false, window, cx),
+            default_temperature: new_input("1.0", None, false, window, cx),
+            extra_beta_headers: new_input("header-1, header-2", None, false, window, cx),
+            mode: ModelModeInput::Default,
+            thinking_budget_tokens: new_input("4096", None, false, window, cx),
             supports_tools: tools.into(),
             supports_images: images.into(),
             supports_parallel_tool_calls: parallel_tool_calls.into(),
@@ -200,6 +240,7 @@ impl ModelInput {
             supports_thinking: ToggleState::Unselected,
             interleaved_reasoning: interleaved_reasoning.into(),
             max_tokens_parameter: max_tokens_parameter.into(),
+            supports_prompt_caching: ToggleState::Unselected,
         }
     }
 }
@@ -807,20 +848,24 @@ impl ConfigureModelsDialog {
                 "Provider Name",
                 "A unique name used to identify this provider.",
                 &form.provider_name,
+                true,
                 cx,
             ))
             .child(render_form_field(
                 "API URL",
                 "The base URL for the compatible API.",
                 &form.api_url,
+                true,
                 cx,
             ))
             .child(render_form_field(
                 "API Key",
                 "Stored in the system keychain, not in settings.json.",
                 &form.api_key,
+                true,
                 cx,
             ))
+            .child(render_custom_headers(form, cx))
             .child(render_models_section(form, window, cx))
             .when_some(form.error.clone(), |this, error| {
                 this.child(render_form_error(error))
@@ -838,15 +883,31 @@ impl ConfigureModelsDialog {
                 provider_name: form.provider_name.read(cx).text(cx),
                 api_url: form.api_url.read(cx).text(cx),
                 api_key: form.api_key.read(cx).text(cx),
+                custom_headers: form
+                    .custom_headers
+                    .iter()
+                    .map(|header| {
+                        (
+                            header.name.read(cx).text(cx),
+                            header.value.read(cx).text(cx),
+                        )
+                    })
+                    .collect(),
                 models: form
                     .models
                     .iter()
                     .map(|model| ModelValues {
                         name: model.name.read(cx).text(cx),
+                        display_name: model.display_name.read(cx).text(cx),
                         max_completion_tokens: model.max_completion_tokens.read(cx).text(cx),
                         max_output_tokens: model.max_output_tokens.read(cx).text(cx),
                         max_tokens: model.max_tokens.read(cx).text(cx),
                         reasoning_effort: model.reasoning_effort,
+                        tool_override: model.tool_override.read(cx).text(cx),
+                        default_temperature: model.default_temperature.read(cx).text(cx),
+                        extra_beta_headers: model.extra_beta_headers.read(cx).text(cx),
+                        mode: model.mode,
+                        thinking_budget_tokens: model.thinking_budget_tokens.read(cx).text(cx),
                         supports_tools: model.supports_tools.selected(),
                         supports_images: model.supports_images.selected(),
                         supports_parallel_tool_calls: model.supports_parallel_tool_calls.selected(),
@@ -855,12 +916,13 @@ impl ConfigureModelsDialog {
                         supports_thinking: model.supports_thinking.selected(),
                         interleaved_reasoning: model.interleaved_reasoning.selected(),
                         max_tokens_parameter: model.max_tokens_parameter.selected(),
+                        supports_prompt_caching: model.supports_prompt_caching.selected(),
                     })
                     .collect(),
             }
         };
 
-        let (provider_name, api_url, api_key, models) =
+        let (provider_name, api_url, api_key, custom_headers, models) =
             match validate_llm_provider_form(&values, cx) {
                 Ok(value) => value,
                 Err(error) => {
@@ -889,7 +951,7 @@ impl ConfigureModelsDialog {
                                         OpenAiCompatibleSettingsContent {
                                             api_url: api_url.clone(),
                                             available_models,
-                                            custom_headers: None,
+                                            custom_headers: custom_headers.clone(),
                                         },
                                     );
                             }
@@ -902,7 +964,7 @@ impl ConfigureModelsDialog {
                                         AnthropicCompatibleSettingsContent {
                                             api_url: api_url.clone(),
                                             available_models,
-                                            custom_headers: None,
+                                            custom_headers: custom_headers.clone(),
                                         },
                                     );
                             }
@@ -1097,10 +1159,9 @@ fn render_form_field(
     title: &'static str,
     description: &'static str,
     editor: &Entity<Editor>,
+    required: bool,
     cx: &App,
 ) -> AnyElement {
-    let colors = cx.theme().colors();
-    let focus_handle = editor.focus_handle(cx).tab_index(0).tab_stop(true);
     v_flex()
         .w_full()
         .gap_1p5()
@@ -1108,12 +1169,17 @@ fn render_form_field(
             v_flex()
                 .gap_0p5()
                 .child(
-                    h_flex().gap_0p5().child(Label::new(title)).child(
-                        Label::new("*")
-                            .size(LabelSize::Small)
-                            .color(Color::Error)
-                            .mb_2(),
-                    ),
+                    h_flex()
+                        .gap_0p5()
+                        .child(Label::new(title))
+                        .when(required, |this| {
+                            this.child(
+                                Label::new("*")
+                                    .size(LabelSize::Small)
+                                    .color(Color::Error)
+                                    .mb_2(),
+                            )
+                        }),
                 )
                 .child(
                     Label::new(description)
@@ -1121,21 +1187,103 @@ fn render_form_field(
                         .color(Color::Muted),
                 ),
         )
+        .child(render_compact_input(editor, cx))
+        .into_any_element()
+}
+
+fn render_compact_input(editor: &Entity<Editor>, cx: &App) -> impl IntoElement {
+    let colors = cx.theme().colors();
+    let focus_handle = editor.focus_handle(cx).tab_index(0).tab_stop(true);
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .h_8()
+        .px_2()
+        .rounded_md()
+        .border_2()
+        .border_color(colors.border)
+        .bg(colors.editor_background)
+        .track_focus(&focus_handle)
+        .focus(|style| style.border_color(colors.border_focused))
+        .child(editor.clone())
+}
+
+fn render_custom_headers(
+    form: &LlmProviderForm,
+    cx: &mut Context<ConfigureModelsDialog>,
+) -> impl IntoElement {
+    v_flex()
+        .gap_2()
         .child(
             h_flex()
-                .w_full()
-                .min_w_64()
-                .h_8()
-                .px_2()
-                .rounded_md()
-                .border_2()
-                .border_color(colors.border)
-                .bg(colors.editor_background)
-                .track_focus(&focus_handle)
-                .focus(|style| style.border_color(colors.border_focused))
-                .child(editor.clone()),
+                .justify_between()
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(Label::new("Custom Headers"))
+                        .child(
+                            Label::new(
+                                "Extra HTTP headers sent with every request to this provider.",
+                            )
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                        ),
+                )
+                .child(
+                    Button::new("add-custom-header", "Add Header")
+                        .start_icon(
+                            Icon::new(IconName::Plus)
+                                .size(IconSize::XSmall)
+                                .color(Color::Muted),
+                        )
+                        .label_size(LabelSize::Small)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if let Mode::AddProvider(form) = &mut this.mode {
+                                form.custom_headers.push(HeaderInput {
+                                    name: new_input("Header-Name", None, false, window, cx),
+                                    value: new_input("value", None, false, window, cx),
+                                });
+                            }
+                            cx.notify();
+                        })),
+                ),
         )
-        .into_any_element()
+        .children(
+            form.custom_headers
+                .iter()
+                .enumerate()
+                .map(|(index, header)| {
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(render_compact_input(&header.name, cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(render_compact_input(&header.value, cx)),
+                        )
+                        .child(
+                            IconButton::new(("remove-custom-header", index), IconName::Trash)
+                                .icon_size(IconSize::Small)
+                                .tooltip(Tooltip::text("Remove Header"))
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    if let Mode::AddProvider(form) = &mut this.mode
+                                        && index < form.custom_headers.len()
+                                    {
+                                        form.custom_headers.remove(index);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                }),
+        )
 }
 
 fn render_models_section(
@@ -1179,6 +1327,8 @@ fn render_model(
     window: &mut Window,
     cx: &mut Context<ConfigureModelsDialog>,
 ) -> AnyElement {
+    let is_open_ai = matches!(kind, CompatibleProviderKind::OpenAi);
+
     v_flex()
         .p_2()
         .gap_2()
@@ -1191,13 +1341,22 @@ fn render_model(
             "Model Name",
             "The model's name in the provider's API.",
             &model.name,
+            true,
             cx,
         ))
-        .when(matches!(kind, CompatibleProviderKind::OpenAi), |this| {
+        .child(render_form_field(
+            "Display Name",
+            "Shown in Zed's model selector. Defaults to the model name.",
+            &model.display_name,
+            false,
+            cx,
+        ))
+        .when(is_open_ai, |this| {
             this.child(render_form_field(
                 "Max Completion Tokens",
                 "Maximum completion tokens for OpenAI-compatible requests.",
                 &model.max_completion_tokens,
+                true,
                 cx,
             ))
         })
@@ -1205,14 +1364,49 @@ fn render_model(
             "Max Output Tokens",
             "The maximum number of tokens the model can output.",
             &model.max_output_tokens,
+            true,
             cx,
         ))
         .child(render_form_field(
             "Max Tokens",
             "The model context window size.",
             &model.max_tokens,
+            true,
             cx,
         ))
+        .when(!is_open_ai, |this| {
+            this.child(render_model_mode_selector(model.mode, index, window, cx))
+                .when(model.mode == ModelModeInput::Thinking, |this| {
+                    this.child(render_form_field(
+                        "Thinking Budget Tokens",
+                        "Token budget for extended thinking. Leave empty for the provider default.",
+                        &model.thinking_budget_tokens,
+                        false,
+                        cx,
+                    ))
+                })
+                .child(render_form_field(
+                    "Tool Override",
+                    "A model name to substitute when calling tools, for models that cannot call them.",
+                    &model.tool_override,
+                    false,
+                    cx,
+                ))
+                .child(render_form_field(
+                    "Default Temperature",
+                    "Sampling temperature for this model. Leave empty for the provider default.",
+                    &model.default_temperature,
+                    false,
+                    cx,
+                ))
+                .child(render_form_field(
+                    "Extra Beta Headers",
+                    "Comma-separated beta header values to send with every request.",
+                    &model.extra_beta_headers,
+                    false,
+                    cx,
+                ))
+        })
         .child(render_model_capabilities(kind, model, index, window, cx))
         .when(model_count > 1, |this| {
             this.child(
@@ -1325,6 +1519,16 @@ fn render_model_capabilities(
                 })
             })
         })
+        .when(!matches!(kind, CompatibleProviderKind::OpenAi), |this| {
+            this.child(render_capability_checkbox(
+                "supports-prompt-caching",
+                index,
+                "Sends prompt caching breakpoints",
+                model.supports_prompt_caching,
+                |model, state| model.supports_prompt_caching = state,
+                cx,
+            ))
+        })
 }
 
 fn render_capability_checkbox(
@@ -1394,6 +1598,58 @@ fn render_reasoning_effort_selector(
         )
 }
 
+fn render_model_mode_selector(
+    selected: ModelModeInput,
+    index: usize,
+    window: &mut Window,
+    cx: &mut Context<ConfigureModelsDialog>,
+) -> impl IntoElement {
+    let dialog = cx.weak_entity();
+    let menu = ContextMenu::build(window, cx, move |mut menu, _window, _cx| {
+        for mode in ModelModeInput::SELECTABLE {
+            let is_selected = mode == selected;
+            let dialog = dialog.clone();
+            menu.push_item(
+                ui::ContextMenuEntry::new(mode.label())
+                    .toggleable(IconPosition::End, is_selected)
+                    .handler(move |_window, cx| {
+                        dialog
+                            .update(cx, |this, cx| {
+                                if let Mode::AddProvider(form) = &mut this.mode
+                                    && let Some(model) = form.models.get_mut(index)
+                                {
+                                    model.mode = mode;
+                                }
+                                cx.notify();
+                            })
+                            .ok();
+                    }),
+            );
+        }
+        menu
+    });
+
+    v_flex()
+        .gap_1()
+        .child(Label::new("Mode").size(LabelSize::Small))
+        .child(
+            Label::new("How extended thinking is enabled for this model.")
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+        .child(
+            DropdownMenu::new(
+                ElementId::Name(format!("model-mode-selector-{index}").into()),
+                selected.label(),
+                menu,
+            )
+            .style(DropdownStyle::Outlined)
+            .trigger_size(ButtonSize::Compact)
+            .full_width(true)
+            .aria_label("Mode"),
+        )
+}
+
 fn render_form_error(error: SharedString) -> impl IntoElement {
     h_flex()
         .w_full()
@@ -1411,15 +1667,22 @@ struct LlmProviderFormValues {
     provider_name: String,
     api_url: String,
     api_key: String,
+    custom_headers: Vec<(String, String)>,
     models: Vec<ModelValues>,
 }
 
 struct ModelValues {
     name: String,
+    display_name: String,
     max_completion_tokens: String,
     max_output_tokens: String,
     max_tokens: String,
     reasoning_effort: OpenAiReasoningEffort,
+    tool_override: String,
+    default_temperature: String,
+    extra_beta_headers: String,
+    mode: ModelModeInput,
+    thinking_budget_tokens: String,
     supports_tools: bool,
     supports_images: bool,
     supports_parallel_tool_calls: bool,
@@ -1428,6 +1691,7 @@ struct ModelValues {
     supports_thinking: bool,
     interleaved_reasoning: bool,
     max_tokens_parameter: bool,
+    supports_prompt_caching: bool,
 }
 
 enum ParsedModels {
@@ -1438,7 +1702,16 @@ enum ParsedModels {
 fn validate_llm_provider_form(
     values: &LlmProviderFormValues,
     cx: &App,
-) -> Result<(String, String, String, ParsedModels), SharedString> {
+) -> Result<
+    (
+        String,
+        String,
+        String,
+        Option<HashMap<String, String>>,
+        ParsedModels,
+    ),
+    SharedString,
+> {
     let provider_name = values.provider_name.clone();
     if provider_name.is_empty() {
         return Err("Provider Name cannot be empty".into());
@@ -1464,6 +1737,14 @@ fn validate_llm_provider_form(
     if api_key.is_empty() {
         return Err("API Key cannot be empty".into());
     }
+
+    let custom_headers = values
+        .custom_headers
+        .iter()
+        .filter(|(name, _)| !name.trim().is_empty())
+        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
+        .collect::<HashMap<_, _>>();
+    let custom_headers = (!custom_headers.is_empty()).then_some(custom_headers);
 
     let models = match values.kind {
         CompatibleProviderKind::OpenAi => ParsedModels::OpenAi(
@@ -1495,7 +1776,7 @@ fn validate_llm_provider_form(
         return Err("Model Names must be unique".into());
     }
 
-    Ok((provider_name, api_url, api_key, models))
+    Ok((provider_name, api_url, api_key, custom_headers, models))
 }
 
 fn parse_model_name(model: &ModelValues) -> Result<String, SharedString> {
@@ -1510,7 +1791,7 @@ fn parse_open_ai_model(
 ) -> Result<OpenAiCompatibleAvailableModel, SharedString> {
     Ok(OpenAiCompatibleAvailableModel {
         name: parse_model_name(model)?,
-        display_name: None,
+        display_name: parse_optional_text(&model.display_name),
         max_completion_tokens: Some(parse_u64_field(
             &model.max_completion_tokens,
             "Max Completion Tokens",
@@ -1540,26 +1821,72 @@ fn parse_anthropic_model(
 ) -> Result<AnthropicCompatibleAvailableModel, SharedString> {
     Ok(AnthropicCompatibleAvailableModel {
         name: parse_model_name(model)?,
-        display_name: None,
+        display_name: parse_optional_text(&model.display_name),
         max_tokens: parse_u64_field(&model.max_tokens, "Max Tokens")?,
-        tool_override: None,
+        tool_override: parse_optional_text(&model.tool_override),
         max_output_tokens: Some(parse_u64_field(
             &model.max_output_tokens,
             "Max Output Tokens",
         )?),
-        default_temperature: None,
-        extra_beta_headers: Vec::new(),
-        mode: None,
+        default_temperature: parse_optional_f32(&model.default_temperature, "Default Temperature")?,
+        extra_beta_headers: parse_list(&model.extra_beta_headers),
+        mode: match model.mode {
+            ModelModeInput::Default => None,
+            ModelModeInput::Thinking => Some(ModelMode::Thinking {
+                budget_tokens: parse_optional_u32(
+                    &model.thinking_budget_tokens,
+                    "Thinking Budget Tokens",
+                )?,
+            }),
+            ModelModeInput::Adaptive => Some(ModelMode::Adaptive),
+        },
         capabilities: AnthropicCompatibleModelCapabilities {
             tools: model.supports_tools,
             images: model.supports_images,
-            prompt_caching: false,
+            prompt_caching: model.supports_prompt_caching,
         },
     })
 }
 
+fn parse_optional_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn parse_optional_f32(value: &str, name: &str) -> Result<Option<f32>, SharedString> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<f32>()
+        .map(Some)
+        .map_err(|_| format!("{name} must be a number").into())
+}
+
+fn parse_optional_u32(value: &str, name: &str) -> Result<Option<u32>, SharedString> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| format!("{name} must be a whole number").into())
+}
+
+fn parse_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn parse_u64_field(value: &str, name: &str) -> Result<u64, SharedString> {
     value
+        .trim()
         .parse::<u64>()
         .map_err(|_| format!("{name} must be a number").into())
 }

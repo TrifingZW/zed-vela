@@ -4,6 +4,7 @@ pub mod compaction;
 pub mod config_options;
 mod connection;
 pub mod content;
+mod conversation_tree;
 mod diff;
 pub mod elicitation;
 mod mention;
@@ -16,9 +17,14 @@ pub use ::terminal::HeadlessTerminal;
 use action_log::{ActionLog, ActionLogTelemetry};
 use agent_client_protocol::{schema::MaybeUndefined, v1::schema as acp_v1, v2::schema as acp_v2};
 use agent_settings::AgentSettings;
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 use collections::{HashSet, IndexMap};
 pub use connection::*;
+use conversation_tree::ConversationTruncation;
+pub use conversation_tree::{
+    ConversationBranch, ConversationNodeId, ConversationTree, SerializedConversationNode,
+    SerializedConversationTree,
+};
 pub use diff::*;
 use feature_flags::{AcpBetaFeatureFlag, FeatureFlagAppExt as _};
 #[cfg(any(test, feature = "test-support"))]
@@ -3665,6 +3671,13 @@ pub struct AcpThread {
     /// Set when this session is an ACP subagent announced by its parent.
     subagent_association: Option<subagents::SubagentAssociation>,
     provisional_title: Option<SharedString>,
+    conversation_tree: ConversationTree,
+    /// Whether a conversation-tree segment is being replayed during
+    /// restoration. While set, only the first user message of the segment
+    /// starts its node; later user messages were injected context (MCP
+    /// prompts, skill envelopes) that were rendered as indented entries live,
+    /// so replaying them as ordinary prompts would fabricate nodes.
+    restoring_conversation_segment: bool,
     entries: Vec<AgentThreadEntry>,
     // Notices stay with the live session, but never enter conversation history or exports.
     notices: Vec<(usize, acp_v2::Notice)>,
@@ -3844,6 +3857,12 @@ pub enum AcpThreadEvent {
     TokenUsageUpdated(OutputTokensUpdate),
     EntryUpdated(usize),
     EntriesRemoved(Range<usize>),
+    /// A branch was created or activated. When `transcript_reset` is true the
+    /// visible entries were replaced wholesale and the view must rebuild its
+    /// entry list; otherwise only branch metadata changed.
+    ConversationTreeChanged {
+        transcript_reset: bool,
+    },
     ToolAuthorizationRequested(PermissionRequestId),
     ToolAuthorizationReceived(PermissionRequestId),
     ElicitationRequested(ElicitationEntryId),
@@ -3999,6 +4018,7 @@ impl AcpThread {
                 | AcpThreadEvent::NoticesUpdated
                 | AcpThreadEvent::TokenUsageUpdated(_)
                 | AcpThreadEvent::EntryUpdated(_)
+                | AcpThreadEvent::ConversationTreeChanged { .. }
                 | AcpThreadEvent::Retry(_)
                 | AcpThreadEvent::SubagentSpawned(_)
                 | AcpThreadEvent::SubagentAssociationUpdated
@@ -4037,6 +4057,8 @@ impl AcpThread {
             plans: HashMap::default(),
             visible_plan: None,
             provisional_title: None,
+            conversation_tree: ConversationTree::new(),
+            restoring_conversation_segment: false,
             project,
             running_turn: None,
             turn_id: 0,
@@ -4203,6 +4225,201 @@ impl AcpThread {
         &self.entries
     }
 
+    pub fn conversation_tree(&self) -> &ConversationTree {
+        &self.conversation_tree
+    }
+
+    /// Switches the visible transcript to `node`. The previous branch is kept
+    /// in the tree, so it can be revisited without losing its history.
+    ///
+    /// The agent session is synchronized as well: its linear message list is
+    /// rebuilt to exactly the new path, so subsequent prompts only see the
+    /// selected branch.
+    pub fn activate_conversation_node(
+        &mut self,
+        node: ConversationNodeId,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        self.ensure_conversation_tree_switch_allowed()?;
+        if self.conversation_tree.node(node).is_none() {
+            bail!("Conversation branch not found");
+        }
+        let old_active = self.conversation_tree.active_node();
+        if node == old_active {
+            return Ok(());
+        }
+        self.flush_streaming_text(cx);
+
+        let old_path = self.conversation_tree.path_to(old_active);
+        let new_path = self.conversation_tree.path_to(node);
+        let old_segments = self.live_path_segments(&old_path);
+
+        if let Some(session_truncate) = self.connection.truncate(self.session_id(), cx) {
+            // The session helper re-enters this thread through `cancel`, so it
+            // must run only after this update has released the entity lease.
+            cx.spawn(async move |_this, cx| {
+                cx.update(|cx| session_truncate.switch_branch(&old_segments, &new_path, cx))
+                    .await
+                    .log_err();
+            })
+            .detach();
+        }
+
+        self.conversation_tree
+            .materialize(node, &mut self.entries)?;
+        cx.emit(AcpThreadEvent::ConversationTreeChanged {
+            transcript_reset: true,
+        });
+        cx.notify();
+        Ok(())
+    }
+
+    /// Replaces the conversation tree with a restored structure. The entries of
+    /// every branch are rebuilt afterwards by replaying the archived messages
+    /// of each node: call [`Self::begin_conversation_node_replay`] before
+    /// replaying a node's segment, then [`Self::store_active_conversation_entries`]
+    /// for nodes that are not on the active path, and finish with
+    /// [`Self::finish_conversation_tree_restore`].
+    pub fn restore_conversation_tree(&mut self, tree: SerializedConversationTree) {
+        self.conversation_tree.restore(tree);
+    }
+
+    /// Makes `node` the active tree node and marks it as awaiting its user
+    /// message so a replayed segment is recorded in that node instead of
+    /// creating a child.
+    pub fn begin_conversation_node_replay(&mut self, node: ConversationNodeId) -> bool {
+        self.restoring_conversation_segment = true;
+        self.conversation_tree.begin_restore_segment(node)
+    }
+
+    /// Moves the replayed entries of the current restore segment into their
+    /// node, so they are archived as an inactive branch. The transcript holds
+    /// only the segment that was just replayed.
+    pub fn store_active_conversation_entries(&mut self) {
+        self.conversation_tree
+            .store_restored_segment(&mut self.entries);
+    }
+
+    /// Restores a node's saved awaiting-user-message flag after its segment was
+    /// replayed during restoration.
+    pub fn set_conversation_node_awaiting_user_message(
+        &mut self,
+        node: ConversationNodeId,
+        awaiting: bool,
+    ) {
+        self.conversation_tree
+            .set_node_awaiting_user_message(node, awaiting);
+    }
+
+    /// Completes a tree restoration and notifies observers that the whole
+    /// transcript was rebuilt.
+    pub fn finish_conversation_tree_restore(&mut self, cx: &mut Context<Self>) {
+        self.restoring_conversation_segment = false;
+        cx.emit(AcpThreadEvent::ConversationTreeChanged {
+            transcript_reset: true,
+        });
+        cx.notify();
+    }
+
+    /// Serializes the tree structure so it can be persisted with the thread.
+    /// Returns `None` when the tree is still in its trivial initial state.
+    ///
+    /// For nodes on the active path, `start_client_id` records the client
+    /// message that starts the node's segment in the linear transcript; the
+    /// agent uses it to split its live messages per node when saving.
+    pub fn serialize_conversation_tree(&self) -> Option<SerializedConversationTree> {
+        if self.conversation_tree.node_count() <= 1 {
+            return None;
+        }
+        let active_path = self
+            .conversation_tree
+            .path_to(self.conversation_tree.active_node());
+        let start_client_ids: HashMap<ConversationNodeId, ClientUserMessageId> = self
+            .live_path_segments(&active_path)
+            .into_iter()
+            .filter_map(|(node, client_id)| client_id.map(|client_id| (node, client_id)))
+            .collect();
+        let nodes = self
+            .conversation_tree
+            .iter()
+            .map(|(id, node)| SerializedConversationNode {
+                id: id.as_u64(),
+                parent: node.parent().map(ConversationNodeId::as_u64),
+                label: self
+                    .conversation_tree
+                    .label(id)
+                    .map(|label| label.to_string())
+                    .unwrap_or_else(|| "Main".to_string()),
+                awaiting_user_message: node.is_awaiting_user_message(),
+                start_client_id: start_client_ids.get(&id).cloned(),
+            })
+            .collect();
+        Some(SerializedConversationTree {
+            active: self.conversation_tree.active_node().as_u64(),
+            nodes,
+        })
+    }
+
+    /// For every node on `path` (in order), the client message id that starts
+    /// the node's segment in the active transcript. The root never starts with
+    /// its own user message, and empty nodes have no message to key on.
+    fn live_path_segments(
+        &self,
+        path: &[ConversationNodeId],
+    ) -> Vec<(ConversationNodeId, Option<ClientUserMessageId>)> {
+        let mut offset = 0;
+        path.iter()
+            .enumerate()
+            .map(|(index, node)| {
+                let client_id = if index == 0 {
+                    None
+                } else {
+                    self.entries
+                        .get(offset)
+                        .and_then(|entry| entry.user_message())
+                        .and_then(|message| message.client_id.clone())
+                };
+                offset = offset.saturating_add(self.conversation_tree.entry_count(*node));
+                (*node, client_id)
+            })
+            .collect()
+    }
+
+    fn ensure_conversation_tree_switch_allowed(&self) -> Result<()> {
+        if !self.connection.supports_conversation_branches() {
+            bail!("Conversation branches are only available for agents that support them");
+        }
+        if self.parent_session_id.is_some() {
+            bail!("Conversation branches are only available for root threads");
+        }
+        if self.is_compacting() {
+            bail!("Wait for context compaction to finish before switching branches");
+        }
+        match self.status() {
+            ThreadStatus::Idle => Ok(()),
+            ThreadStatus::Generating => Err(anyhow!(
+                "Finish or stop the current response before switching branches"
+            )),
+            ThreadStatus::Unconfirmed => Err(anyhow!(
+                "Wait for the agent to confirm its state before switching branches"
+            )),
+        }
+    }
+
+    fn refresh_conversation_branch_label(&mut self, entry_index: usize, cx: &App) {
+        let Some(label) = self
+            .entries
+            .get(entry_index)
+            .and_then(|entry| entry.user_message())
+            .map(|message| user_message_branch_label(&message.content, cx))
+        else {
+            return;
+        };
+        if let Some(node) = self.conversation_tree.node_starting_at(entry_index) {
+            self.conversation_tree.set_label_if_placeholder(node, label);
+        }
+    }
+
     pub fn notices(&self) -> &[(usize, acp_v2::Notice)] {
         &self.notices
     }
@@ -4287,6 +4504,13 @@ impl AcpThread {
 
     pub fn supports_truncate(&self, cx: &App) -> bool {
         self.connection.truncate(self.session_id(), cx).is_some()
+    }
+
+    /// Whether the connected agent can archive and restore conversation
+    /// branches. ACP agents are linear: they only support truncation, so the
+    /// branch graph is disabled for them.
+    pub fn supports_conversation_branches(&self) -> bool {
+        self.connection.supports_conversation_branches()
     }
 
     /// Gates editing user messages and rewinding the thread to them.
@@ -5354,6 +5578,9 @@ impl AcpThread {
         }
         meta.apply(message_meta);
         self.emit_message_update(location, previous_entry_count, cx);
+        if kind == MessageKind::User {
+            self.refresh_conversation_branch_label(location.entry_index(), cx);
+        }
         Ok(())
     }
 
@@ -5431,6 +5658,9 @@ impl AcpThread {
             message_content.append(content, &language_registry, path_style, cx);
         }
         self.emit_message_update(location, previous_entry_count, cx);
+        if kind == MessageKind::User {
+            self.refresh_conversation_branch_label(location.entry_index(), cx);
+        }
         Ok(())
     }
 
@@ -5476,6 +5706,22 @@ impl AcpThread {
         let entry_index = self.entries.len();
         match kind {
             MessageKind::User => {
+                // Only the first user message of a replayed branch segment
+                // starts its node. Later user messages in the same segment
+                // were injected context (MCP prompts, skill envelopes) that
+                // were rendered as indented entries live, so replaying them as
+                // ordinary prompts would fabricate nodes and corrupt the tree.
+                let injected_continuation = self.restoring_conversation_segment
+                    && !self
+                        .conversation_tree
+                        .node(self.conversation_tree.active_node())
+                        .is_some_and(|node| node.is_awaiting_user_message());
+                let created_branch = if injected_continuation {
+                    false
+                } else {
+                    self.conversation_tree
+                        .begin_user_turn(SharedString::from("Branch"))
+                };
                 self.entries
                     .push(AgentThreadEntry::UserMessage(UserMessage {
                         identity,
@@ -5485,6 +5731,12 @@ impl AcpThread {
                         content: MessageContent::default(),
                         indented: false,
                     }));
+                self.conversation_tree.record_entry_push();
+                if created_branch {
+                    cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                        transcript_reset: false,
+                    });
+                }
                 Ok(MessageLocation::User { entry_index })
             }
             MessageKind::Session => {
@@ -5531,6 +5783,7 @@ impl AcpThread {
                             indented: false,
                             is_subagent_output: false,
                         }));
+                    self.conversation_tree.record_entry_push();
                     Ok(MessageLocation::Assistant {
                         entry_index,
                         chunk_index: 0,
@@ -5923,11 +6176,37 @@ impl AcpThread {
 
     fn push_entry(&mut self, entry: AgentThreadEntry, cx: &mut Context<Self>) {
         self.flush_streaming_text(cx);
+        let label = match &entry {
+            AgentThreadEntry::UserMessage(message) if !message.indented => {
+                Some(user_message_branch_label(&message.content, cx))
+            }
+            _ => None,
+        };
+        let created_branch = match label {
+            Some(label) => self.conversation_tree.begin_user_turn(label),
+            None => false,
+        };
         self.entries.push(entry);
+        self.conversation_tree.record_entry_push();
+        if created_branch {
+            cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                transcript_reset: false,
+            });
+        }
         cx.emit(AcpThreadEvent::NewEntry);
     }
 
     fn truncate_entries(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.truncate_entries_with_mode(index, ConversationTruncation::Discard, cx);
+    }
+
+    fn truncate_entries_with_mode(
+        &mut self,
+        index: usize,
+        mode: ConversationTruncation,
+        cx: &mut Context<Self>,
+    ) {
+        self.flush_streaming_text(cx);
         let removed_requests = self
             .entries
             .iter()
@@ -5937,12 +6216,23 @@ impl AcpThread {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        self.entries.truncate(index);
+
+        if !self
+            .conversation_tree
+            .truncate_active_path(index, &mut self.entries, mode)
+        {
+            self.entries.truncate(index);
+            self.conversation_tree.truncate_active_counts(index);
+        }
+
         for id in removed_requests {
             self.resolve_permission_request(id, RequestPermissionOutcome::Cancelled, cx);
         }
         // Unanchored prompts cannot remain valid across a transcript rollback.
         self.cancel_generic_permission_requests(cx);
+        cx.emit(AcpThreadEvent::ConversationTreeChanged {
+            transcript_reset: false,
+        });
     }
 
     pub fn push_context_compaction(
@@ -7293,6 +7583,7 @@ impl AcpThread {
             .content
             .replace_prompt(content, &language_registry, path_style, cx);
         self.emit_message_update(location, previous_entry_count, cx);
+        self.refresh_conversation_branch_label(location.entry_index(), cx);
         cx.notify();
         Ok(())
     }
@@ -7834,6 +8125,7 @@ impl AcpThread {
 
     /// Rewinds this thread to before the entry at `index`, removing it and all
     /// subsequent entries while rejecting any action_log changes made from that point.
+    /// Unlike `restore_checkpoint`, this method does not restore from git.
     pub fn rewind(
         &mut self,
         client_id: ClientUserMessageId,
@@ -7845,8 +8137,22 @@ impl AcpThread {
 
         self.flush_streaming_text(cx);
         let telemetry = ActionLogTelemetry::from(&*self);
+        // For agents that can restore branches, the rewound turn is preserved
+        // with its messages archived per node, so switching back restores it;
+        // linear (ACP) agents simply discard it.
+        let mode = if self.connection.supports_conversation_branches() {
+            ConversationTruncation::Preserve
+        } else {
+            ConversationTruncation::Discard
+        };
+        let old_segments = self.live_path_segments(
+            &self
+                .conversation_tree
+                .path_to(self.conversation_tree.active_node()),
+        );
         cx.spawn(async move |this, cx| {
-            cx.update(|cx| truncate.run(client_id.clone(), cx)).await?;
+            cx.update(|cx| truncate.run_preserving_branch(client_id.clone(), &old_segments, cx))
+                .await?;
             this.update(cx, |this, cx| {
                 this.flush_streaming_text(cx);
                 if let Some((ix, _)) = this.user_message_mut(&client_id) {
@@ -7858,7 +8164,7 @@ impl AcpThread {
                         .collect();
 
                     let range = ix..this.entries.len();
-                    this.truncate_entries(ix, cx);
+                    this.truncate_entries_with_mode(ix, mode, cx);
                     cx.emit(AcpThreadEvent::EntriesRemoved(range));
 
                     // Kill and remove the terminals
@@ -8503,6 +8809,28 @@ impl AcpThread {
                 }
             }
         }
+    }
+}
+
+fn user_message_branch_label(content: &MessageContent, cx: &App) -> SharedString {
+    let markdown = content.to_markdown(cx);
+    let line = markdown
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("Branch")
+        .trim();
+    let mut label = String::new();
+    for (index, character) in line.chars().enumerate() {
+        if index >= 48 {
+            label.push('…');
+            break;
+        }
+        label.push(character);
+    }
+    if label.is_empty() {
+        "Branch".into()
+    } else {
+        label.into()
     }
 }
 
@@ -19733,6 +20061,79 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    #[gpui::test]
+    async fn test_restoring_segments_does_not_fabricate_nodes(cx: &mut TestAppContext) {
+        init_test(cx);
+        let thread = new_test_thread(cx).await;
+
+        // Restore a saved tree: root -> first -> second (active), where the
+        // first node's segment contains injected user messages after its own
+        // prompt, exactly like MCP prompts and skill envelopes produce.
+        thread.update(cx, |thread, cx| {
+            thread.restore_conversation_tree(SerializedConversationTree {
+                active: 2,
+                nodes: vec![
+                    SerializedConversationNode {
+                        id: 0,
+                        parent: None,
+                        label: "Main".into(),
+                        awaiting_user_message: false,
+                        start_client_id: None,
+                    },
+                    SerializedConversationNode {
+                        id: 1,
+                        parent: Some(0),
+                        label: "First".into(),
+                        awaiting_user_message: false,
+                        start_client_id: None,
+                    },
+                    SerializedConversationNode {
+                        id: 2,
+                        parent: Some(1),
+                        label: "Second".into(),
+                        awaiting_user_message: false,
+                        start_client_id: None,
+                    },
+                ],
+            });
+
+            assert!(thread.begin_conversation_node_replay(ConversationNodeId::from_u64(1)));
+            thread
+                .upsert_local_user_message(ClientUserMessageId::new(), vec!["prompt".into()], cx)
+                .expect("replayed prompt");
+            thread
+                .upsert_local_user_message(
+                    ClientUserMessageId::new(),
+                    vec!["injected context".into()],
+                    cx,
+                )
+                .expect("replayed injected context");
+            thread.store_active_conversation_entries();
+
+            assert!(thread.begin_conversation_node_replay(ConversationNodeId::from_u64(2)));
+            thread
+                .upsert_local_user_message(ClientUserMessageId::new(), vec!["next".into()], cx)
+                .expect("replayed next prompt");
+            thread.finish_conversation_tree_restore(cx);
+        });
+
+        thread.read_with(cx, |thread, _cx| {
+            assert_eq!(
+                thread.conversation_tree().node_count(),
+                3,
+                "injected user messages must not fabricate conversation nodes"
+            );
+            assert_eq!(thread.entries().len(), 1, "active path shows its own turn");
+            assert_eq!(
+                thread
+                    .conversation_tree()
+                    .entry_count(ConversationNodeId::from_u64(1)),
+                2,
+                "the injected user message stays in its node's segment"
+            );
+        });
     }
 
     fn only_thread_elicitation(thread: &AcpThread) -> (ElicitationEntryId, &Elicitation) {

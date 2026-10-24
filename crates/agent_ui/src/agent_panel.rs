@@ -38,6 +38,10 @@ use zed_actions::{
 use crate::ExpandMessageEditor;
 use crate::ManageProfiles;
 use crate::agent_connection_store::AgentConnectionStore;
+use crate::branch_graph::{
+    BRANCH_GRAPH_MAX_ZOOM, BRANCH_GRAPH_MIN_ZOOM, BRANCH_GRAPH_NODE_HEIGHT,
+    BRANCH_GRAPH_NODE_WIDTH, layout_branch_graph, paint_branch_edge,
+};
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
 use crate::terminal_thread_metadata_store::{
     TerminalThreadMetadata, TerminalThreadMetadataStore, compose_terminal_thread_title,
@@ -74,10 +78,11 @@ use feature_flags::{CreateThreadToolFeatureFlag, FeatureFlagAppExt as _};
 use fs::Fs;
 use futures::FutureExt as _;
 use gpui::{
-    Action, Anchor, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, ClipboardItem,
-    Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, KeyContext, Pixels,
-    PlatformDisplay, Subscription, Task, TaskExt, WeakEntity, WindowHandle, prelude::*,
-    pulsating_between,
+    Action, Anchor, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, Bounds,
+    ClipboardItem, DispatchPhase, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    KeyContext, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformDisplay,
+    Point as GpuiPoint, ScrollDelta, ScrollEvent, Subscription, Task, TaskExt, WeakEntity,
+    WindowHandle, canvas, point, prelude::*, pulsating_between, rems,
 };
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
@@ -93,8 +98,9 @@ use terminal_view::TerminalView;
 use text::OffsetRangeExt;
 use theme_settings::ThemeSettings;
 use ui::{
-    ContextMenu, ContextMenuEntry, GradientFade, IconButton, KeyBinding, PopoverMenu,
-    PopoverMenuHandle, ProjectEmptyState, Tab, Tooltip, prelude::*, utils::WithRemSize,
+    ContextMenu, ContextMenuEntry, ElevationIndex, GradientFade, IconButton, KeyBinding,
+    PopoverMenu, PopoverMenuHandle, ProjectEmptyState, Tab, Tooltip, prelude::*,
+    utils::WithRemSize,
 };
 use util::ResultExt as _;
 use workspace::{
@@ -1113,6 +1119,16 @@ impl BaseView {
     }
 }
 
+/// The screen-space point a scroll-zoom is anchored to, together with the
+/// graph-space point that should stay under it. Pan is derived from these two
+/// on every animation tick so that zooming stays anchored at the pointer even
+/// while the animated zoom is still catching up to its target.
+#[derive(Clone, Copy)]
+struct BranchGraphZoomAnchor {
+    viewport_position: GpuiPoint<Pixels>,
+    graph_position: GpuiPoint<Pixels>,
+}
+
 pub struct AgentPanel {
     workspace: WeakEntity<Workspace>,
     /// Workspace id is used as a database key
@@ -1152,6 +1168,16 @@ pub struct AgentPanel {
     _settings_subscription: Subscription,
     retained_thread_subscriptions: HashMap<ThreadId, Subscription>,
     last_context_source: Option<AgentContextSource>,
+    branch_graph_open: bool,
+    branch_graph_zoom: f32,
+    branch_graph_zoom_target: f32,
+    branch_graph_zoom_animating: bool,
+    branch_graph_zoom_anchor: Option<BranchGraphZoomAnchor>,
+    branch_graph_pan: GpuiPoint<Pixels>,
+    branch_graph_pan_origin: Option<GpuiPoint<Pixels>>,
+    branch_graph_viewport_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    branch_graph_error: Option<SharedString>,
+    _branch_graph_observation: Option<Subscription>,
 
     is_active: bool,
 }
@@ -1574,6 +1600,16 @@ impl AgentPanel {
             _settings_subscription,
             retained_thread_subscriptions: HashMap::default(),
             last_context_source: None,
+            branch_graph_open: false,
+            branch_graph_zoom: 1.0,
+            branch_graph_zoom_target: 1.0,
+            branch_graph_zoom_animating: false,
+            branch_graph_zoom_anchor: None,
+            branch_graph_pan: point(px(16.0), px(12.0)),
+            branch_graph_pan_origin: None,
+            branch_graph_viewport_bounds: Rc::new(Cell::new(None)),
+            branch_graph_error: None,
+            _branch_graph_observation: None,
             is_active: false,
         };
 
@@ -4412,7 +4448,39 @@ impl AgentPanel {
                 None
             }
         };
+        self.refresh_branch_graph_observation(cx);
         self.serialize(cx);
+    }
+
+    fn refresh_branch_graph_observation(&mut self, cx: &mut Context<Self>) {
+        if !self.branch_graph_open {
+            self._branch_graph_observation = None;
+            return;
+        }
+        let thread = self
+            .active_conversation_view()
+            .and_then(|view| view.read(cx).root_thread(cx));
+        // ACP agents cannot restore branches, so the graph closes instead of
+        // showing a transcript that cannot be switched within.
+        if !thread
+            .as_ref()
+            .is_some_and(|thread| thread.read(cx).supports_conversation_branches())
+        {
+            self.branch_graph_open = false;
+            self.branch_graph_error = None;
+            self.branch_graph_pan_origin = None;
+            self.settle_branch_graph_zoom();
+            self._branch_graph_observation = None;
+            cx.notify();
+            return;
+        }
+        self._branch_graph_observation = thread.map(|thread| {
+            cx.observe(&thread, |this, _, cx| {
+                if this.branch_graph_open {
+                    cx.notify();
+                }
+            })
+        });
     }
 
     fn visible_surface(&self) -> VisibleSurface<'_> {
@@ -6213,6 +6281,13 @@ impl AgentPanel {
                     thread_view.update(cx, |thread_view, cx| thread_view.render_sandbox_status(cx))
                 });
 
+            // ACP agents cannot restore branches, so the branch graph is only
+            // offered for threads whose agent supports them.
+            let thread_supports_branches = self
+                .active_conversation_view()
+                .and_then(|conversation_view| conversation_view.read(cx).root_thread(cx))
+                .is_some_and(|thread| thread.read(cx).supports_conversation_branches());
+
             base_container
                 .child(
                     h_flex()
@@ -6236,6 +6311,29 @@ impl AgentPanel {
                         .flex_none()
                         .gap_1()
                         .children(sandbox_status)
+                        .when(
+                            matches!(self.visible_surface(), VisibleSurface::AgentThread(_))
+                                && thread_supports_branches,
+                            |this| {
+                                this.child(
+                                    IconButton::new("toggle-branch-graph", IconName::GitGraph)
+                                        .icon_size(IconSize::Small)
+                                        .toggle_state(self.branch_graph_open)
+                                        .tooltip(Tooltip::text("Conversation Branch Graph"))
+                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                            this.branch_graph_open = !this.branch_graph_open;
+                                            if this.branch_graph_open {
+                                                this.branch_graph_error = None;
+                                            } else {
+                                                this.branch_graph_pan_origin = None;
+                                                this.settle_branch_graph_zoom();
+                                            }
+                                            this.refresh_branch_graph_observation(cx);
+                                            cx.notify();
+                                        })),
+                                )
+                            },
+                        )
                         .when(can_create_entries, |this| this.child(new_thread_menu))
                         .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),
@@ -6252,6 +6350,553 @@ impl AgentPanel {
             .border_b_2()
             .border_color(cx.theme().colors().border)
             .child(toolbar_content)
+    }
+
+    fn render_branch_graph_overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.branch_graph_open {
+            return None;
+        }
+
+        let thread = self.active_conversation_view()?.read(cx).root_thread(cx)?;
+        if !thread.read(cx).supports_conversation_branches() {
+            return None;
+        }
+        let (branches, active_id) = {
+            let thread_ref = thread.read(cx);
+            let tree = thread_ref.conversation_tree();
+            (tree.branches(), tree.active_node())
+        };
+        let layouts = layout_branch_graph(&branches);
+
+        let zoom = self.branch_graph_zoom;
+        let pan_x: f32 = self.branch_graph_pan.x.into();
+        let pan_y: f32 = self.branch_graph_pan.y.into();
+        let node_width = BRANCH_GRAPH_NODE_WIDTH * zoom;
+        let node_height = BRANCH_GRAPH_NODE_HEIGHT * zoom;
+        let thickness = px((1.5 * zoom).max(1.0));
+
+        let mut index_by_id: HashMap<acp_thread::ConversationNodeId, usize> = HashMap::default();
+        for (index, node) in layouts.iter().enumerate() {
+            index_by_id.insert(node.id, index);
+        }
+        let on_active_path: HashSet<acp_thread::ConversationNodeId> = branches
+            .iter()
+            .filter(|branch| branch.is_on_active_path)
+            .map(|branch| branch.id)
+            .collect();
+
+        let node_screen_position = |node: &crate::branch_graph::BranchGraphNodeLayout| {
+            (pan_x + node.x * zoom, pan_y + node.y * zoom)
+        };
+        let mut edge_segments: Vec<(GpuiPoint<Pixels>, GpuiPoint<Pixels>, bool)> = branches
+            .iter()
+            .filter_map(|branch| {
+                let parent = branch.parent?;
+                let from = *index_by_id.get(&parent)?;
+                let to = *index_by_id.get(&branch.id)?;
+                let (from_x, from_y) = node_screen_position(&layouts[from]);
+                let (to_x, to_y) = node_screen_position(&layouts[to]);
+                Some((
+                    point(px(from_x + node_width), px(from_y + node_height * 0.5)),
+                    point(px(to_x), px(to_y + node_height * 0.5)),
+                    branch.is_on_active_path && on_active_path.contains(&parent),
+                ))
+            })
+            .collect();
+        // Sibling edges share both the stub leaving their parent and the same
+        // vertical run at their identical midpoint, so the highlighted path
+        // must be painted last; otherwise a later sibling overpaints it with
+        // the idle color.
+        edge_segments.sort_by_key(|(_, _, is_active)| *is_active);
+
+        let colors = cx.theme().colors();
+        let border = colors.border;
+        let border_focused = colors.border_focused;
+        let surface = colors.surface_background;
+        let element = colors.element_background;
+        let text = colors.text;
+        let muted = colors.text_muted;
+        let viewport_bounds_cell = self.branch_graph_viewport_bounds.clone();
+        let pan_entity = cx.entity();
+        let is_dragging = self.branch_graph_pan_origin.is_some();
+
+        let max_content_width = AgentSettings::get_global(cx).max_content_width;
+
+        // The graph header replaces the agent panel toolbar, so its title must
+        // line up with the thread title there: the same row padding, plus the
+        // selected-agent icon block and the gap that precede the title. The
+        // block's width depends on the agent: custom icons render at `Small`,
+        // built-in ones at the default size, and icon-less agents leave only
+        // their own `px_0p5` padding.
+        let custom_icon = match &self.selected_agent {
+            Agent::Custom { id, .. } => self
+                .project
+                .read(cx)
+                .agent_server_store()
+                .read(cx)
+                .agent_icon(&id),
+            _ => None,
+        };
+        let has_custom_icon = custom_icon.is_some();
+        let has_builtin_icon = !has_custom_icon && self.selected_agent.icon().is_some();
+        let icon_block = if has_custom_icon {
+            IconSize::Small.rems().0 + 0.25
+        } else if has_builtin_icon {
+            IconSize::default().rems().0 + 0.25
+        } else {
+            0.25
+        };
+        let title_indent = DynamicSpacing::Base04.rems(cx).0 * 2.0 + icon_block;
+        let header = h_flex()
+            .id("agent-branch-graph-header")
+            .h(Tab::container_height(cx))
+            .flex_shrink_0()
+            .max_w_full()
+            .bg(colors.tab_bar_background)
+            .border_b_2()
+            .border_color(border)
+            .child(
+                h_flex()
+                    .size_full()
+                    .when_some(max_content_width, |this, max_w| this.max_w(max_w).mx_auto())
+                    .flex_none()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .relative()
+                            .h_full()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .gap(DynamicSpacing::Base04.rems(cx))
+                            .pl(rems(title_indent))
+                            .child(
+                                Label::new("Conversation Tree")
+                                    .size(LabelSize::Default)
+                                    .flex_shrink_0(),
+                            )
+                            .when_some(self.branch_graph_error.clone(), |this, error| {
+                                this.child(
+                                    Label::new(error)
+                                        .size(LabelSize::Small)
+                                        .color(Color::Error)
+                                        .truncate(),
+                                )
+                            })
+                            .child(div().flex_1())
+                            .child(
+                                Label::new("Right-drag to pan · Scroll to zoom")
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .px_1()
+                            .h_full()
+                            .flex_none()
+                            .gap_1()
+                            .child(
+                                IconButton::new("agent-branch-graph-center", IconName::Crosshair)
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Center on the current branch"))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.center_branch_graph_on_active(cx);
+                                    })),
+                            )
+                            .child(
+                                IconButton::new("agent-branch-graph-reset", IconName::RotateCcw)
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Reset graph zoom and pan"))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.branch_graph_zoom = 1.0;
+                                        this.branch_graph_zoom_target = 1.0;
+                                        this.branch_graph_zoom_animating = false;
+                                        this.branch_graph_zoom_anchor = None;
+                                        let reset = point(px(16.0), px(12.0));
+                                        this.branch_graph_pan = reset;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                IconButton::new("agent-branch-graph-close", IconName::Close)
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Close conversation tree"))
+                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                        this.branch_graph_open = false;
+                                        this.branch_graph_error = None;
+                                        this.branch_graph_pan_origin = None;
+                                        this.settle_branch_graph_zoom();
+                                        this._branch_graph_observation = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+
+        let mut viewport = div()
+            .id("agent-branch-graph-viewport")
+            .relative()
+            .flex_1()
+            .w_full()
+            .overflow_hidden()
+            .bg(colors.panel_background)
+            .when(is_dragging, |this| this.cursor_grabbing())
+            .when(!is_dragging, |this| this.cursor_grab())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.settle_branch_graph_zoom();
+                    this.branch_graph_pan_origin = Some(event.position);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, _, _window, cx| {
+                    this.branch_graph_pan_origin = None;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Right,
+                cx.listener(|this, _, _window, cx| {
+                    this.branch_graph_pan_origin = None;
+                    cx.notify();
+                }),
+            )
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
+                let delta_y: f32 = match event.delta {
+                    ScrollDelta::Pixels(delta) => delta.y.into(),
+                    ScrollDelta::Lines(delta) => delta.y * 50.0,
+                };
+                if delta_y.abs() < 0.01 {
+                    return;
+                }
+
+                // Wheel up (positive delta) zooms in, matching Zed's other
+                // scroll-zoomable views such as the mermaid diagram viewer.
+                let factor = (1.0 + delta_y * 0.0015).clamp(0.75, 1.25);
+                let new_target = (this.branch_graph_zoom_target * factor)
+                    .clamp(BRANCH_GRAPH_MIN_ZOOM, BRANCH_GRAPH_MAX_ZOOM);
+                if (new_target - this.branch_graph_zoom_target).abs() < f32::EPSILON {
+                    return;
+                }
+
+                if let Some(bounds) = this.branch_graph_viewport_bounds.get() {
+                    let viewport_position = point(
+                        event.position.x - bounds.origin.x,
+                        event.position.y - bounds.origin.y,
+                    );
+                    let zoom = this.branch_graph_zoom;
+                    let local_x: f32 = viewport_position.x.into();
+                    let local_y: f32 = viewport_position.y.into();
+                    let pan_x: f32 = this.branch_graph_pan.x.into();
+                    let pan_y: f32 = this.branch_graph_pan.y.into();
+                    this.branch_graph_zoom_anchor = Some(BranchGraphZoomAnchor {
+                        viewport_position,
+                        graph_position: point(
+                            px((local_x - pan_x) / zoom),
+                            px((local_y - pan_y) / zoom),
+                        ),
+                    });
+                } else {
+                    this.branch_graph_zoom_anchor = None;
+                }
+
+                this.branch_graph_zoom_target = new_target;
+                this.ensure_branch_graph_zoom_animation(cx);
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(
+                canvas(
+                    move |bounds, _, _| viewport_bounds_cell.set(Some(bounds)),
+                    move |bounds, _, window, cx| {
+                        // Panning is handled at the window level in the capture phase so
+                        // that a drag keeps working while the pointer travels over node
+                        // hitboxes or the graph header.
+                        let move_entity = pan_entity.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+                            if phase != DispatchPhase::Capture
+                                || event.pressed_button != Some(MouseButton::Right)
+                            {
+                                return;
+                            }
+                            move_entity.update(cx, |this, cx| {
+                                let Some(last) = this.branch_graph_pan_origin else {
+                                    return;
+                                };
+                                this.branch_graph_pan += event.position - last;
+                                this.branch_graph_pan_origin = Some(event.position);
+                                cx.notify();
+                            });
+                        });
+
+                        // Clear the drag state from the window as well, so a release
+                        // outside the viewport (or outside the window) cannot leave a
+                        // stale grab in place.
+                        let up_entity = pan_entity.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                            if phase != DispatchPhase::Capture || event.button != MouseButton::Right
+                            {
+                                return;
+                            }
+                            up_entity.update(cx, |this, cx| {
+                                if this.branch_graph_pan_origin.take().is_some() {
+                                    cx.notify();
+                                }
+                            });
+                        });
+
+                        let accent = cx.theme().colors().text_accent;
+                        let edge_color = cx.theme().colors().border;
+                        for (start, end, active) in &edge_segments {
+                            paint_branch_edge(
+                                window,
+                                bounds.origin + *start,
+                                bounds.origin + *end,
+                                thickness,
+                                if *active { accent } else { edge_color },
+                            );
+                        }
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+
+        for node in &layouts {
+            let (screen_x, screen_y) = node_screen_position(node);
+            let is_active = node.is_active;
+            let is_on_active_path = node.is_on_active_path;
+            let card_border = if is_active {
+                border_focused
+            } else if is_on_active_path {
+                border_focused.opacity(0.65)
+            } else {
+                border
+            };
+            let card_background = if is_active {
+                element
+            } else if is_on_active_path {
+                surface
+            } else {
+                // Matches the user message bubble in the thread content.
+                colors.editor_background
+            };
+            let card_text = if is_active || is_on_active_path {
+                text
+            } else {
+                muted
+            };
+            let meta = format!("{} entries", node.entry_count);
+            let card_shadow = ElevationIndex::ModalSurface.shadow(cx);
+
+            let id = node.id;
+
+            let card = v_flex()
+                .id(("agent-branch-node", id.as_u64()))
+                .w(px(node_width))
+                .h(px(node_height))
+                .px(px(8.0 * zoom))
+                .py(px(5.0 * zoom))
+                .gap(px(2.0 * zoom))
+                .rounded_md()
+                .border_2()
+                .border_color(card_border)
+                .bg(card_background)
+                .shadow(card_shadow)
+                .cursor_pointer()
+                .when(is_dragging, |this| this.cursor_grabbing())
+                .text_color(card_text)
+                .text_size(px((11.0 * zoom).max(7.0)))
+                .hover(move |style| style.border_color(border_focused))
+                .on_click(cx.listener({
+                    let thread = thread.clone();
+                    move |this, _, _window, cx| {
+                        this.switch_branch_from_graph(&thread, id, active_id, cx);
+                    }
+                }))
+                .child(
+                    div()
+                        .w_full()
+                        .line_clamp(1)
+                        .text_ellipsis()
+                        .child(node.label.clone()),
+                )
+                .when(zoom >= 0.65, |this| {
+                    this.child(
+                        div()
+                            .w_full()
+                            .text_size(px((9.5 * zoom).max(7.0)))
+                            .text_color(muted)
+                            .line_clamp(1)
+                            .text_ellipsis()
+                            .child(meta),
+                    )
+                });
+
+            let node_element = div()
+                .absolute()
+                .left(px(screen_x))
+                .top(px(screen_y))
+                .w(px(node_width))
+                .h(px(node_height))
+                .child(card);
+
+            viewport = viewport.child(node_element);
+        }
+
+        Some(
+            v_flex()
+                .id("agent-branch-graph-overlay")
+                .absolute()
+                .inset_0()
+                .size_full()
+                .occlude()
+                .bg(colors.panel_background)
+                .child(header)
+                .child(viewport)
+                .into_any_element(),
+        )
+    }
+
+    fn center_branch_graph_on_active(&mut self, cx: &mut Context<Self>) {
+        let Some(bounds) = self.branch_graph_viewport_bounds.get() else {
+            return;
+        };
+        let Some(thread) = self
+            .active_conversation_view()
+            .and_then(|view| view.read(cx).root_thread(cx))
+        else {
+            return;
+        };
+        let (branches, active_id) = {
+            let thread = thread.read(cx);
+            let tree = thread.conversation_tree();
+            (tree.branches(), tree.active_node())
+        };
+        let layouts = layout_branch_graph(&branches);
+        let Some(active) = layouts.iter().find(|node| node.id == active_id) else {
+            return;
+        };
+
+        self.settle_branch_graph_zoom();
+        let zoom = self.branch_graph_zoom;
+        let viewport_width: f32 = bounds.size.width.into();
+        let viewport_height: f32 = bounds.size.height.into();
+        let active_center_x = (active.x + BRANCH_GRAPH_NODE_WIDTH * 0.5) * zoom;
+        let active_center_y = (active.y + BRANCH_GRAPH_NODE_HEIGHT * 0.5) * zoom;
+        self.branch_graph_pan = point(
+            px(viewport_width * 0.5 - active_center_x),
+            px(viewport_height * 0.5 - active_center_y),
+        );
+        cx.notify();
+    }
+
+    fn switch_branch_from_graph(
+        &mut self,
+        thread: &Entity<AcpThread>,
+        node: acp_thread::ConversationNodeId,
+        active_id: acp_thread::ConversationNodeId,
+        cx: &mut Context<Self>,
+    ) {
+        if node == active_id {
+            return;
+        }
+        match thread.update(cx, |thread, cx| thread.activate_conversation_node(node, cx)) {
+            Ok(()) => {
+                self.branch_graph_error = None;
+                cx.notify();
+            }
+            Err(error) => {
+                self.branch_graph_error = Some(SharedString::from(error.to_string()));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Snaps a running scroll-zoom animation to its target while keeping the
+    /// graph anchored at the pointer. Dragging or recentering takes over
+    /// immediately instead of fighting the animation.
+    fn settle_branch_graph_zoom(&mut self) {
+        let target = self.branch_graph_zoom_target;
+        if let Some(anchor) = self.branch_graph_zoom_anchor.take() {
+            let local_x: f32 = anchor.viewport_position.x.into();
+            let local_y: f32 = anchor.viewport_position.y.into();
+            let graph_x: f32 = anchor.graph_position.x.into();
+            let graph_y: f32 = anchor.graph_position.y.into();
+            self.branch_graph_pan = point(
+                px(local_x - graph_x * target),
+                px(local_y - graph_y * target),
+            );
+        }
+        self.branch_graph_zoom = target;
+        self.branch_graph_zoom_animating = false;
+    }
+
+    fn ensure_branch_graph_zoom_animation(&mut self, cx: &mut Context<Self>) {
+        if self.branch_graph_zoom_animating {
+            return;
+        }
+        self.branch_graph_zoom_animating = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(8))
+                    .await;
+
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        if !this.branch_graph_open || !this.branch_graph_zoom_animating {
+                            this.branch_graph_zoom_animating = false;
+                            this.branch_graph_zoom_anchor = None;
+                            return false;
+                        }
+
+                        let current = this.branch_graph_zoom;
+                        let target = this.branch_graph_zoom_target;
+                        // Roughly 50-70ms to settle, which reads as an intentional
+                        // ease without feeling sluggish.
+                        let smoothing = 0.5;
+                        let next = current + (target - current) * smoothing;
+                        let settled = (target - next).abs() < 0.002;
+                        let zoom = if settled { target } else { next };
+
+                        this.branch_graph_zoom = zoom;
+                        if let Some(anchor) = this.branch_graph_zoom_anchor {
+                            let local_x: f32 = anchor.viewport_position.x.into();
+                            let local_y: f32 = anchor.viewport_position.y.into();
+                            let graph_x: f32 = anchor.graph_position.x.into();
+                            let graph_y: f32 = anchor.graph_position.y.into();
+                            this.branch_graph_pan =
+                                point(px(local_x - graph_x * zoom), px(local_y - graph_y * zoom));
+                        }
+
+                        if settled {
+                            this.branch_graph_zoom_animating = false;
+                            this.branch_graph_zoom_anchor = None;
+                        }
+                        cx.notify();
+                        !settled
+                    })
+                    .unwrap_or(false);
+
+                if !keep_going {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn should_render_trial_end_upsell(&self, cx: &mut Context<Self>) -> bool {
@@ -6695,7 +7340,8 @@ impl Render for AgentPanel {
                         .child(self.render_drag_target(cx))
                 }
             })
-            .children(self.render_trial_end_upsell(window, cx));
+            .children(self.render_trial_end_upsell(window, cx))
+            .children(self.render_branch_graph_overlay(cx));
 
         match self.visible_font_size() {
             WhichFontSize::AgentFont => {
@@ -11732,6 +12378,7 @@ mod tests {
             ui_scroll_position: None,
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: Default::default(),
+            conversation_tree: None,
         };
 
         let thread_store = cx.update(|cx| ThreadStore::global(cx));

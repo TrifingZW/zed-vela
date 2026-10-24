@@ -351,6 +351,7 @@ impl Conversation {
                     | AcpThreadEvent::TokenUsageUpdated(_)
                     | AcpThreadEvent::EntryUpdated(_)
                     | AcpThreadEvent::EntriesRemoved(_)
+                    | AcpThreadEvent::ConversationTreeChanged { .. }
                     | AcpThreadEvent::Retry(_)
                     | AcpThreadEvent::SubagentSpawned(_)
                     | AcpThreadEvent::SubagentAssociationUpdated
@@ -786,6 +787,7 @@ fn affects_thread_metadata(event: &AcpThreadEvent) -> bool {
         | AcpThreadEvent::StatusChanged
         | AcpThreadEvent::SubmissionUpdated(_)
         | AcpThreadEvent::EntriesRemoved(_)
+        | AcpThreadEvent::ConversationTreeChanged { .. }
         | AcpThreadEvent::Retry(_)
         | AcpThreadEvent::TokenUsageUpdated(_)
         | AcpThreadEvent::PromptCapabilitiesUpdated
@@ -2037,6 +2039,41 @@ impl ConversationView {
                     active.update(cx, |active, cx| {
                         active.sync_editor_mode(cx);
                     });
+                }
+            }
+            AcpThreadEvent::ConversationTreeChanged { transcript_reset } => {
+                if let Some(active) = self.thread_view(&session_id) {
+                    if *transcript_reset {
+                        let entry_view_state = active.read(cx).entry_view_state.clone();
+                        let list_state = active.read(cx).list_state.clone();
+                        let entry_count = thread.read(cx).entries().len();
+                        let previous_entry_count = entry_view_state.read(cx).len();
+                        let previous_item_count = list_state.item_count();
+                        entry_view_state.update(cx, |view_state, cx| {
+                            list_state.splice(0..previous_item_count, 0);
+                            view_state.remove(0..previous_entry_count);
+                            for index in 0..entry_count {
+                                view_state.sync_entry(index, thread, window, cx);
+                            }
+                            list_state.splice_focusable(
+                                0..0,
+                                (0..entry_count).map(|index| {
+                                    view_state
+                                        .entry(index)
+                                        .and_then(|entry| entry.focus_handle(cx))
+                                }),
+                            );
+                            list_state.scroll_to_end();
+                        });
+                        active.update(cx, |active, cx| {
+                            active.editing_message = None;
+                            active.sync_editor_mode(cx);
+                            active.sync_generating_indicator(cx);
+                            cx.notify();
+                        });
+                    } else {
+                        active.update(cx, |_, cx| cx.notify());
+                    }
                 }
             }
             AcpThreadEvent::SubagentSpawned(subagent_session_id) => {

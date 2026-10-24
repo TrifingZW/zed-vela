@@ -974,18 +974,38 @@ impl NativeAgent {
             cx.observe(&thread_handle, move |this, thread, cx| {
                 this.save_thread(thread, cx)
             }),
-            cx.subscribe(&acp_thread, |_this, thread, event, cx| {
-                if matches!(
-                    event,
-                    acp_thread::AcpThreadEvent::ToolAuthorizationRequested(_)
+            cx.subscribe(
+                &acp_thread,
+                |this, acp_thread, event: &acp_thread::AcpThreadEvent, cx| {
+                    match event {
+                        acp_thread::AcpThreadEvent::ConversationTreeChanged { .. } => {
+                            // Mirror the tree structure into the native thread, so a
+                            // save after the ACP thread was released still persists
+                            // the whole tree.
+                            let (snapshot, session_id) = {
+                                let thread = acp_thread.read(cx);
+                                (
+                                    thread.serialize_conversation_tree(),
+                                    thread.session_id().clone(),
+                                )
+                            };
+                            if let Some(session) = this.sessions.get_mut(&session_id) {
+                                session.thread.update(cx, |thread, _cx| {
+                                    thread.set_conversation_tree_snapshot(snapshot);
+                                });
+                            }
+                        }
+                        acp_thread::AcpThreadEvent::ToolAuthorizationRequested(_)
                         | acp_thread::AcpThreadEvent::ToolAuthorizationReceived(_)
                         | acp_thread::AcpThreadEvent::ElicitationRequested(_)
                         | acp_thread::AcpThreadEvent::ElicitationResponded(_)
-                        | acp_thread::AcpThreadEvent::EntriesRemoved(_)
-                ) {
-                    thread.update(cx, |thread, cx| thread.sync_local_action_state(cx));
-                }
-            }),
+                        | acp_thread::AcpThreadEvent::EntriesRemoved(_) => {
+                            acp_thread.update(cx, |thread, cx| thread.sync_local_action_state(cx));
+                        }
+                        _ => {}
+                    }
+                },
+            ),
             cx.observe_release(&acp_thread, {
                 let session_id = session_id.clone();
                 let acp_thread_id = acp_thread.entity_id();
@@ -1863,17 +1883,77 @@ impl NativeAgent {
                             this.register_session(thread.clone(), project_id, cx)
                         })
                         .map_err(Arc::new)?;
-                    let events = thread.update(cx, |thread, cx| thread.replay(cx));
-                    cx.update(|cx| {
-                        NativeAgentConnection::handle_thread_events(
-                            events,
-                            acp_thread.downgrade(),
-                            None,
-                            cx,
-                        )
-                    })
-                    .await
-                    .map_err(Arc::new)?;
+                    let restore_plan =
+                        thread.update(cx, |thread, _cx| thread.conversation_restore_plan());
+                    if let Some(restore_plan) = restore_plan {
+                        // The thread was saved with a branch tree. Install the
+                        // structure, then replay each branch's messages into
+                        // its node — archiving inactive branches and keeping
+                        // the saved active path materialized in the transcript.
+                        acp_thread.update(cx, |acp_thread, _cx| {
+                            acp_thread.restore_conversation_tree(restore_plan.structure)
+                        });
+                        let mut base_message_ix = 0;
+                        for segment in &restore_plan.segments {
+                            let began = acp_thread.update(cx, |acp_thread, _cx| {
+                                acp_thread.begin_conversation_node_replay(segment.node)
+                            });
+                            if !began {
+                                log::warn!(
+                                    "skipping restore of unknown conversation branch {:?}",
+                                    segment.node
+                                );
+                                continue;
+                            }
+                            let events = thread.update(cx, |thread, cx| {
+                                thread.replay_messages(
+                                    segment.messages.clone(),
+                                    base_message_ix,
+                                    cx,
+                                )
+                            });
+                            base_message_ix += segment.messages.len();
+                            cx.update(|cx| {
+                                NativeAgentConnection::handle_thread_events(
+                                    events,
+                                    acp_thread.downgrade(),
+                                    None,
+                                    cx,
+                                )
+                            })
+                            .await
+                            .map_err(Arc::new)?;
+                            if !segment.on_active_path {
+                                acp_thread.update(cx, |acp_thread, _cx| {
+                                    acp_thread.store_active_conversation_entries();
+                                });
+                            }
+                            // Replaying an empty segment (e.g. the root) would
+                            // otherwise leave the node marked as awaiting a user
+                            // message it will never receive.
+                            acp_thread.update(cx, |acp_thread, _cx| {
+                                acp_thread.set_conversation_node_awaiting_user_message(
+                                    segment.node,
+                                    segment.awaiting_user_message,
+                                );
+                            });
+                        }
+                        acp_thread.update(cx, |acp_thread, cx| {
+                            acp_thread.finish_conversation_tree_restore(cx)
+                        });
+                    } else {
+                        let events = thread.update(cx, |thread, cx| thread.replay(cx));
+                        cx.update(|cx| {
+                            NativeAgentConnection::handle_thread_events(
+                                events,
+                                acp_thread.downgrade(),
+                                None,
+                                cx,
+                            )
+                        })
+                        .await
+                        .map_err(Arc::new)?;
+                    }
                     let outcomes = thread.read_with(cx, |thread, _| {
                         thread
                             .subagent_outcomes()
@@ -2794,12 +2874,20 @@ impl NativeAgentConnection {
 
                         match event {
                             ThreadEvent::UserMessage(message) => {
-                                let content = message.content.iter().cloned()
-                                    .map(acp_v2::ContentBlock::from)
-                                    .collect::<Vec<_>>();
-                                acp_thread.update(cx, |thread, cx| {
-                                    thread.upsert_local_user_message(message.id, content, cx)
-                                })??;
+                                // Zero-content user messages are markers (for
+                                // example the one preceding a `/compact`
+                                // summary) and never had a visible entry.
+                                if !message.content.is_empty() {
+                                    let content = message
+                                        .content
+                                        .iter()
+                                        .cloned()
+                                        .map(acp_v2::ContentBlock::from)
+                                        .collect::<Vec<_>>();
+                                    acp_thread.update(cx, |thread, cx| {
+                                        thread.upsert_local_user_message(message.id, content, cx)
+                                    })??;
+                                }
                             }
                             ThreadEvent::AgentText(text) => {
                                 acp_thread.update(cx, |thread, cx| {
@@ -3381,6 +3469,10 @@ impl acp_thread::AgentConnection for NativeAgentConnection {
         })
     }
 
+    fn supports_conversation_branches(&self) -> bool {
+        true
+    }
+
     fn set_title(
         &self,
         session_id: &acp_v2::SessionId,
@@ -3622,6 +3714,65 @@ impl acp_thread::AgentSessionTruncate for NativeAgentSessionTruncate {
             cancellation.await?;
             let usage = thread.update(cx, |thread, cx| {
                 thread.truncate(client_user_message_id, cx)?;
+                anyhow::Ok(thread.latest_token_usage())
+            })?;
+            acp_thread
+                .update(cx, |thread, cx| thread.update_token_usage(usage, cx))
+                .log_err();
+            Ok(())
+        })
+    }
+
+    fn run_preserving_branch(
+        &self,
+        client_user_message_id: acp_thread::ClientUserMessageId,
+        old_segments: &[(
+            acp_thread::ConversationNodeId,
+            Option<acp_thread::ClientUserMessageId>,
+        )],
+        cx: &mut App,
+    ) -> Task<Result<()>> {
+        let cancellation = match self.acp_thread.update(cx, |thread, cx| thread.cancel(cx)) {
+            Ok(cancellation) => cancellation,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let thread = self.thread.clone();
+        let acp_thread = self.acp_thread.clone();
+        let old_segments = old_segments.to_vec();
+        cx.spawn(async move |cx| {
+            cancellation.await?;
+            let usage = thread.update(cx, |thread, cx| {
+                thread.truncate_archiving_branch(client_user_message_id, &old_segments, cx)?;
+                anyhow::Ok(thread.latest_token_usage())
+            })?;
+            acp_thread
+                .update(cx, |thread, cx| thread.update_token_usage(usage, cx))
+                .log_err();
+            Ok(())
+        })
+    }
+
+    fn switch_branch(
+        &self,
+        old_segments: &[(
+            acp_thread::ConversationNodeId,
+            Option<acp_thread::ClientUserMessageId>,
+        )],
+        new_path: &[acp_thread::ConversationNodeId],
+        cx: &mut App,
+    ) -> Task<Result<()>> {
+        let cancellation = match self.acp_thread.update(cx, |thread, cx| thread.cancel(cx)) {
+            Ok(cancellation) => cancellation,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let thread = self.thread.clone();
+        let acp_thread = self.acp_thread.clone();
+        let old_segments = old_segments.to_vec();
+        let new_path = new_path.to_vec();
+        cx.spawn(async move |cx| {
+            cancellation.await?;
+            let usage = thread.update(cx, |thread, cx| {
+                thread.switch_conversation_branch(&old_segments, &new_path, cx)?;
                 anyhow::Ok(thread.latest_token_usage())
             })?;
             acp_thread

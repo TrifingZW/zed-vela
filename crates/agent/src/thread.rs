@@ -1,13 +1,17 @@
 use crate::{
     ApplyCodeActionTool, AskUserTool, CodeActionStore, ContextServerRegistry, CopyPathTool,
-    CreateDirectoryTool, CreateThreadTool, DbLanguageModel, DbThread, DeletePathTool,
-    DiagnosticsTool, EditFileTool, FetchTool, FindPathTool, FindReferencesTool, GetCodeActionsTool,
-    GoToDefinitionTool, GrepTool, ListAgentsAndModelsTool, ListDirectoryTool, MovePathTool,
-    ProjectSnapshot, ReadFileTool, RenameTool, SandboxedTerminalTool, SpawnAgentTool,
-    SystemPromptTemplate, Template, Templates, TerminalTool, ToolPermissionDecision, WebSearchTool,
-    WriteFileTool, decide_permission_from_settings,
+    CreateDirectoryTool, CreateThreadTool, DbConversationBranch, DbConversationTree,
+    DbLanguageModel, DbThread, DeletePathTool, DiagnosticsTool, EditFileTool, FetchTool,
+    FindPathTool, FindReferencesTool, GetCodeActionsTool, GoToDefinitionTool, GrepTool,
+    ListAgentsAndModelsTool, ListDirectoryTool, MovePathTool, ProjectSnapshot, ReadFileTool,
+    RenameTool, SandboxedTerminalTool, SpawnAgentTool, SystemPromptTemplate, Template, Templates,
+    TerminalTool, ToolPermissionDecision, WebSearchTool, WriteFileTool,
+    decide_permission_from_settings,
 };
-use acp_thread::{AgentModelId, ClientUserMessageId, MentionUri, ProcessOutput};
+use acp_thread::{
+    AgentModelId, ClientUserMessageId, ConversationNodeId, MentionUri, ProcessOutput,
+    SerializedConversationTree,
+};
 use action_log::ActionLog;
 use agent_settings::UserAgentsMd;
 
@@ -910,6 +914,26 @@ pub struct AvailableModel {
     pub is_default: bool,
 }
 
+/// How to rebuild the conversation tree of a restored thread: the structure to
+/// install in the ACP thread, plus the replay segments for every node.
+#[derive(Debug)]
+pub(crate) struct ConversationRestorePlan {
+    pub structure: SerializedConversationTree,
+    /// Inactive branches first, then the active path in root-to-active order,
+    /// so replayed entries end up archived in their nodes while the active
+    /// path stays materialized in the transcript.
+    pub segments: Vec<ConversationRestoreSegment>,
+}
+
+/// The messages of one conversation branch node to replay during restoration.
+#[derive(Debug)]
+pub(crate) struct ConversationRestoreSegment {
+    pub node: ConversationNodeId,
+    pub on_active_path: bool,
+    pub awaiting_user_message: bool,
+    pub messages: Vec<Arc<Message>>,
+}
+
 #[derive(Debug)]
 pub enum ThreadEvent {
     UserMessage(UserMessage),
@@ -1364,6 +1388,20 @@ pub struct Thread {
     /// already-granted permissions skip the approval prompt.
     /// Never persisted — lives and dies with this thread.
     sandbox_grants: Rc<RefCell<ThreadSandboxGrants>>,
+    /// Messages of conversation branches that are not part of the current
+    /// active path, keyed by branch node id. The active path stays in
+    /// [`Self::messages`]; `switch_conversation_branch` moves segments between
+    /// the two so the linear context sent to the model always matches the
+    /// selected branch.
+    archived_branch_messages: HashMap<ConversationNodeId, Vec<Arc<Message>>>,
+    /// Structure of the ACP thread's conversation tree, refreshed whenever the
+    /// tree changes. Used by [`Self::to_db`] to split the live messages per
+    /// node and persist the whole tree.
+    conversation_tree_snapshot: Option<SerializedConversationTree>,
+    /// The tree loaded from the database, until
+    /// [`Self::conversation_restore_plan`] consumes it to rebuild every
+    /// branch.
+    restored_conversation_tree: Option<DbConversationTree>,
 }
 
 impl Thread {
@@ -1510,6 +1548,9 @@ impl Thread {
             inherits_parent_model_settings: true,
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: Rc::new(RefCell::new(ThreadSandboxGrants::default())),
+            archived_branch_messages: HashMap::default(),
+            conversation_tree_snapshot: None,
+            restored_conversation_tree: None,
         }
     }
 
@@ -1587,9 +1628,24 @@ impl Thread {
         &mut self,
         cx: &mut Context<Self>,
     ) -> mpsc::UnboundedReceiver<Result<ThreadEvent>> {
+        self.replay_messages(self.messages.clone(), 0, cx)
+    }
+
+    /// Replays an arbitrary slice of messages (a single conversation branch
+    /// segment when restoring a tree) into a thread event stream.
+    /// `base_message_ix` offsets the message indexes used to scope replayed
+    /// tool call ids, keeping them unique across sequentially replayed
+    /// segments.
+    pub(crate) fn replay_messages(
+        &mut self,
+        messages: Vec<Arc<Message>>,
+        base_message_ix: usize,
+        cx: &mut Context<Self>,
+    ) -> mpsc::UnboundedReceiver<Result<ThreadEvent>> {
         let (tx, rx) = mpsc::unbounded();
         let stream = ThreadEventStream::new(tx);
-        for (message_ix, message) in self.messages.iter().enumerate() {
+        for (offset, message) in messages.iter().enumerate() {
+            let message_ix = base_message_ix + offset;
             match &**message {
                 Message::User(user_message) => stream.send_user_message(user_message),
                 Message::Agent(assistant_message) => {
@@ -1805,6 +1861,11 @@ impl Thread {
         cx: &mut Context<Self>,
     ) -> Self {
         let settings = AgentSettings::get_global(cx);
+        let restored_conversation_tree = db_thread.conversation_tree.clone();
+        let (conversation_tree_snapshot, archived_branch_messages) = restored_conversation_tree
+            .as_ref()
+            .map(Self::restored_tree_state)
+            .unwrap_or_else(|| (None, HashMap::default()));
         let profile_id = db_thread
             .profile
             .unwrap_or_else(|| settings.default_profile.clone());
@@ -1890,7 +1951,80 @@ impl Thread {
             sandbox_grants: Rc::new(RefCell::new(ThreadSandboxGrants::from_db(
                 &db_thread.sandbox_grants,
             ))),
+            archived_branch_messages,
+            conversation_tree_snapshot,
+            restored_conversation_tree,
         }
+    }
+
+    /// Splits the tree loaded from the database into the runtime pieces: the
+    /// structure snapshot (with each node's segment start derived from its
+    /// archived messages) and the message archive of the inactive branches.
+    fn restored_tree_state(
+        tree: &DbConversationTree,
+    ) -> (
+        Option<SerializedConversationTree>,
+        HashMap<ConversationNodeId, Vec<Arc<Message>>>,
+    ) {
+        let branches: HashMap<u64, &Vec<Arc<Message>>> = tree
+            .branches
+            .iter()
+            .map(|branch| (branch.id, &branch.messages))
+            .collect();
+        let nodes = tree
+            .nodes
+            .iter()
+            .map(|node| acp_thread::SerializedConversationNode {
+                id: node.id,
+                parent: node.parent,
+                label: node.label.clone(),
+                awaiting_user_message: node.awaiting_user_message,
+                start_client_id: branches.get(&node.id).and_then(|messages| {
+                    messages.iter().find_map(|message| match &**message {
+                        Message::User(message) => Some(message.id.clone()),
+                        _ => None,
+                    })
+                }),
+            })
+            .collect();
+        let snapshot = Some(SerializedConversationTree {
+            active: tree.active,
+            nodes,
+        });
+        let active_path = Self::conversation_tree_active_path(&tree.nodes, tree.active);
+        let archive = tree
+            .branches
+            .iter()
+            .filter(|branch| !active_path.contains(&branch.id))
+            .map(|branch| {
+                (
+                    ConversationNodeId::from_u64(branch.id),
+                    branch.messages.clone(),
+                )
+            })
+            .collect();
+        (snapshot, archive)
+    }
+
+    /// The path of node ids from the root to `active`, given the serialized
+    /// node list. Defensive against cycles.
+    fn conversation_tree_active_path(
+        nodes: &[acp_thread::SerializedConversationNode],
+        active: u64,
+    ) -> Vec<u64> {
+        let parent_by_id: HashMap<u64, Option<u64>> =
+            nodes.iter().map(|node| (node.id, node.parent)).collect();
+        let mut path = vec![active];
+        let mut current = active;
+        while let Some(parent) = parent_by_id.get(&current).copied().flatten()
+            && parent != current
+            && !path.contains(&parent)
+        {
+            path.push(parent);
+            current = parent;
+        }
+        path.reverse();
+        path
     }
 
     pub fn sandbox_status(&self, cx: &App) -> Option<(ThreadSandbox, ThreadSandbox)> {
@@ -1966,6 +2100,7 @@ impl Thread {
     /// can wait until the response finishes streaming.
     pub fn to_db(&self, cx: &App) -> Task<DbThread> {
         let initial_project_snapshot = self.initial_project_snapshot.clone();
+        let conversation_tree = self.build_db_conversation_tree();
         let mut thread = DbThread {
             title: self.title().unwrap_or_default(),
             messages: self.messages.clone(),
@@ -1989,12 +2124,123 @@ impl Thread {
             }),
             sandboxed_terminal_temp_dir: self.sandboxed_terminal_temp_dir.clone(),
             sandbox_grants: self.sandbox_grants.borrow().to_db(),
+            conversation_tree,
         };
 
         cx.background_spawn(async move {
             let initial_project_snapshot = initial_project_snapshot.await;
             thread.initial_project_snapshot = initial_project_snapshot;
             thread
+        })
+    }
+
+    /// Records the current structure of the conversation tree. Refreshed on
+    /// every tree change so a save after the ACP thread was released still
+    /// sees the whole tree.
+    pub(crate) fn set_conversation_tree_snapshot(
+        &mut self,
+        tree: Option<SerializedConversationTree>,
+    ) {
+        self.conversation_tree_snapshot = tree;
+    }
+
+    /// Persists the conversation tree: the structure from the snapshot, plus
+    /// the messages of every branch — the active path split out of the live
+    /// linear messages, inactive branches from the archive.
+    fn build_db_conversation_tree(&self) -> Option<DbConversationTree> {
+        let snapshot = self.conversation_tree_snapshot.as_ref()?;
+        if snapshot.nodes.len() <= 1 {
+            return None;
+        }
+        let active_path = Self::conversation_tree_active_path(&snapshot.nodes, snapshot.active);
+        let node_by_id: HashMap<u64, &acp_thread::SerializedConversationNode> =
+            snapshot.nodes.iter().map(|node| (node.id, node)).collect();
+        let spec: Vec<(ConversationNodeId, Option<ClientUserMessageId>)> = active_path
+            .iter()
+            .filter_map(|id| node_by_id.get(id))
+            .map(|node| {
+                (
+                    ConversationNodeId::from_u64(node.id),
+                    node.start_client_id.clone(),
+                )
+            })
+            .collect();
+        let live: HashMap<ConversationNodeId, Vec<Arc<Message>>> = self
+            .live_segment_ranges(&spec)
+            .into_iter()
+            .map(|(node, start, end)| (node, self.messages[start..end].to_vec()))
+            .collect();
+        let branches = snapshot
+            .nodes
+            .iter()
+            .map(|node| {
+                let node_id = ConversationNodeId::from_u64(node.id);
+                let messages = if active_path.contains(&node.id) {
+                    live.get(&node_id).cloned().unwrap_or_default()
+                } else {
+                    self.archived_branch_messages
+                        .get(&node_id)
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                DbConversationBranch {
+                    id: node.id,
+                    messages,
+                }
+            })
+            .collect();
+        Some(DbConversationTree {
+            active: snapshot.active,
+            nodes: snapshot.nodes.clone(),
+            branches,
+        })
+    }
+
+    /// How to rebuild the conversation tree of a restored thread: the tree
+    /// structure plus the per-node message segments to replay, inactive
+    /// branches first and the active path last.
+    pub(crate) fn conversation_restore_plan(&mut self) -> Option<ConversationRestorePlan> {
+        let tree = self.restored_conversation_tree.take()?;
+        if !tree.nodes.iter().any(|node| node.id == tree.active) {
+            log::warn!("restored conversation tree has no active node");
+            return None;
+        }
+        let active_path = Self::conversation_tree_active_path(&tree.nodes, tree.active);
+        let branches: HashMap<u64, &Vec<Arc<Message>>> = tree
+            .branches
+            .iter()
+            .map(|branch| (branch.id, &branch.messages))
+            .collect();
+        let mut segments = Vec::new();
+        for node in &tree.nodes {
+            if active_path.contains(&node.id) {
+                continue;
+            }
+            segments.push(ConversationRestoreSegment {
+                node: ConversationNodeId::from_u64(node.id),
+                on_active_path: false,
+                awaiting_user_message: node.awaiting_user_message,
+                messages: branches.get(&node.id).cloned().cloned().unwrap_or_default(),
+            });
+        }
+        for id in &active_path {
+            let Some(node) = tree.nodes.iter().find(|node| node.id == *id) else {
+                log::warn!("restored conversation tree is missing an active path node");
+                continue;
+            };
+            segments.push(ConversationRestoreSegment {
+                node: ConversationNodeId::from_u64(*id),
+                on_active_path: true,
+                awaiting_user_message: node.awaiting_user_message,
+                messages: branches.get(id).cloned().cloned().unwrap_or_default(),
+            });
+        }
+        Some(ConversationRestorePlan {
+            structure: SerializedConversationTree {
+                active: tree.active,
+                nodes: tree.nodes,
+            },
+            segments,
         })
     }
 
@@ -2525,6 +2771,134 @@ impl Thread {
             }
         }
         self.context_usage = context_usage_from_history(&self.messages, &self.request_token_usage);
+    }
+
+    /// Truncates at `client_user_message_id` like [`Self::truncate`], but keeps
+    /// the removed messages archived under the conversation branch they belong
+    /// to, so switching back to that branch restores the full context.
+    /// `old_segments` describes how the live linear messages map onto tree
+    /// nodes (see [`Self::switch_conversation_branch`]). Token usage entries
+    /// are kept because the archived branch may become active again.
+    pub(crate) fn truncate_archiving_branch(
+        &mut self,
+        client_user_message_id: ClientUserMessageId,
+        old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        self.cancel(cx).detach();
+        self.advance_prompt_id();
+        // Clear pending message since cancel will try to flush it asynchronously,
+        // and we don't want that content to be added after we truncate
+        self.pending_message.take();
+        self.archive_live_segments(old_segments);
+        let Some(position) = self.messages.iter().position(|message| {
+            matches!(&**message, Message::User(UserMessage { id, .. }) if id == &client_user_message_id)
+        }) else {
+            return Err(anyhow!("Message not found"));
+        };
+        self.messages.truncate(position);
+        self.clear_summary();
+        cx.notify();
+        Ok(())
+    }
+
+    /// Rebuilds the linear message list from the archived segments of
+    /// `new_path`, archiving the segments of the current path first. Afterwards
+    /// the context sent to the model matches the selected branch exactly.
+    pub(crate) fn switch_conversation_branch(
+        &mut self,
+        old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+        new_path: &[ConversationNodeId],
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        self.cancel(cx).detach();
+        self.advance_prompt_id();
+        self.pending_message.take();
+        self.archive_live_segments(old_segments);
+        let mut messages = Vec::new();
+        for node in new_path {
+            messages.extend(
+                self.archived_branch_messages
+                    .get(node)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        self.messages = messages;
+        self.clear_summary();
+        cx.notify();
+        Ok(())
+    }
+
+    /// Moves the live linear messages into the per-node archive, splitting them
+    /// by the user message that starts each node's segment.
+    fn archive_live_segments(
+        &mut self,
+        old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+    ) {
+        for (node, start, end) in self.live_segment_ranges(old_segments) {
+            self.archived_branch_messages
+                .insert(node, self.messages[start..end].to_vec());
+        }
+    }
+
+    /// Splits the live messages into per-node ranges given the nodes of a path
+    /// in order, each paired with the client message id that starts its
+    /// segment. The root (and empty nodes) have no id of their own and absorb
+    /// whatever precedes the first found boundary. Ids that cannot be found
+    /// merge their segment forward, which is logged.
+    fn live_segment_ranges(
+        &self,
+        old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+    ) -> Vec<(ConversationNodeId, usize, usize)> {
+        let mut boundaries: Vec<(ConversationNodeId, usize)> = Vec::new();
+        let mut cursor = 0usize;
+        let mut pending: Option<ConversationNodeId> = None;
+        for (node, client_id) in old_segments {
+            let Some(client_id) = client_id else {
+                if boundaries.is_empty() {
+                    pending = Some(*node);
+                }
+                continue;
+            };
+            let position = self.messages[cursor..]
+                .iter()
+                .position(|message| {
+                    matches!(&**message, Message::User(UserMessage { id, .. }) if id == client_id)
+                })
+                .map(|position| cursor + position);
+            match position {
+                Some(position) => {
+                    if let Some(node) = pending.take() {
+                        boundaries.push((node, cursor));
+                    }
+                    boundaries.push((*node, position));
+                    cursor = position;
+                }
+                None => {
+                    log::warn!("no linear message found for conversation branch {node:?}");
+                }
+            }
+        }
+        if boundaries.is_empty() {
+            let node = pending.or_else(|| old_segments.last().map(|(node, _)| *node));
+            return match node {
+                Some(node) if !self.messages.is_empty() => {
+                    vec![(node, 0, self.messages.len())]
+                }
+                _ => Vec::new(),
+            };
+        }
+        boundaries
+            .iter()
+            .enumerate()
+            .map(|(index, (node, start))| {
+                let end = boundaries
+                    .get(index + 1)
+                    .map_or(self.messages.len(), |(_, next_start)| *next_start);
+                (*node, *start, end)
+            })
+            .collect()
     }
 
     pub fn latest_request_token_usage(&self) -> Option<language_model::TokenUsage> {

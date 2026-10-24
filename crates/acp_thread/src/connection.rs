@@ -1,4 +1,4 @@
-use crate::{AcpThread, ElicitationStore, ReceiptSubmission};
+use crate::{AcpThread, ConversationNodeId, ElicitationStore, ReceiptSubmission};
 use agent_client_protocol::{schema::MaybeUndefined, v1::schema as acp_v1, v2::schema as acp_v2};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -301,6 +301,13 @@ pub trait AgentConnection {
         None
     }
 
+    /// Whether this agent can archive and restore conversation branches, so
+    /// the UI can offer the branch graph. Linear agents (ACP) only support
+    /// truncation.
+    fn supports_conversation_branches(&self) -> bool {
+        false
+    }
+
     fn set_title(
         &self,
         _session_id: &acp_v2::SessionId,
@@ -355,6 +362,34 @@ impl dyn AgentConnection {
 
 pub trait AgentSessionTruncate {
     fn run(&self, client_user_message_id: ClientUserMessageId, cx: &mut App) -> Task<Result<()>>;
+
+    /// Truncates at `client_user_message_id` like [`Self::run`], but preserves
+    /// the removed messages as an archived conversation branch so switching
+    /// back can restore them. `old_segments` describes how the session's live
+    /// linear messages map to tree nodes (see [`Self::switch_branch`]).
+    /// Connections that cannot archive fall back to a plain truncation.
+    fn run_preserving_branch(
+        &self,
+        client_user_message_id: ClientUserMessageId,
+        _old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+        cx: &mut App,
+    ) -> Task<Result<()>> {
+        self.run(client_user_message_id, cx)
+    }
+
+    /// Swaps the session's linear context to the path `new_path`, archiving
+    /// the live messages per node so the abandoned branch can be restored
+    /// later. `old_segments` lists the nodes of the current active path in
+    /// order, each paired with the client message id that starts its segment
+    /// (the root and empty nodes have `None`).
+    fn switch_branch(
+        &self,
+        _old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+        _new_path: &[ConversationNodeId],
+        _cx: &mut App,
+    ) -> Task<Result<()>> {
+        Task::ready(Ok(()))
+    }
 }
 
 pub trait AgentSessionClientUserMessageIds {

@@ -174,6 +174,10 @@ You can mark specific models as favorites either through the model selector, by 
 
 Cycle through your favorites with {#kb agent::CycleFavoriteModels} without opening the model selector.
 
+### Configuring Models
+
+The **Configure** button at the bottom of the model selector opens the Configure Models dialog, which mirrors the LLM Providers settings page: it lists providers, opens each provider's own configuration, and can add OpenAI- or Anthropic-compatible providers. From the provider list, the dialog closes only via **Done** or `Escape`; clicking outside of it leaves it open. You can also open it from the command palette with {#action agent::ConfigureModels}.
+
 ## Using Tools and Profiles {#using-tools}
 
 The Agent Panel supports tool calling, which enables agentic editing. Zed includes [built-in tools](./tools.md) for searching your codebase, editing files, running terminal commands, and more.

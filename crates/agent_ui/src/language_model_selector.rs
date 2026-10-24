@@ -15,7 +15,7 @@ use ordered_float::OrderedFloat;
 use picker::{Picker, PickerDelegate};
 use settings::Settings;
 use ui::prelude::*;
-use zed_actions::agent::OpenSettings;
+use zed_actions::agent::ConfigureModels;
 
 use crate::ui::{ModelSelectorFooter, ModelSelectorHeader, ModelSelectorListItem};
 
@@ -558,7 +558,12 @@ impl PickerDelegate for LanguageModelPickerDelegate {
             return None;
         }
 
-        Some(ModelSelectorFooter::new(OpenSettings.boxed_clone(), focus_handle).into_any_element())
+        // Zed Vela: open the Configure Models dialog instead of the LLM Providers
+        // settings page.
+        Some(
+            ModelSelectorFooter::new(ConfigureModels.boxed_clone(), focus_handle)
+                .into_any_element(),
+        )
     }
 }
 

@@ -75,7 +75,7 @@ use util::{
 };
 use workspace::Workspace;
 
-use crate::agent_configuration::ManageProfilesModal;
+use crate::agent_configuration::{ConfigureModelsDialog, ManageProfilesModal};
 pub use crate::agent_connection_store::{ActiveAcpConnection, AgentConnectionStore};
 pub use crate::agent_panel::{
     AgentPanel, AgentPanelEvent, AgentPanelTerminalInfo, TerminalId, ThreadTitleRegenerationResult,
@@ -750,6 +750,7 @@ pub fn init(
     })
     .detach();
     cx.observe_new(ManageProfilesModal::register).detach();
+    cx.observe_new(ConfigureModelsDialog::register).detach();
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
             |workspace: &mut Workspace,

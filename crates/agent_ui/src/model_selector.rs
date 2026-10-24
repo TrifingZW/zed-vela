@@ -17,7 +17,7 @@ use picker::{Picker, PickerDelegate};
 use settings::SettingsStore;
 use ui::{DocumentationAside, IntoElement, prelude::*};
 use util::ResultExt;
-use zed_actions::agent::OpenSettings;
+use zed_actions::agent::ConfigureModels;
 
 use crate::model_search;
 use crate::ui::{
@@ -381,7 +381,12 @@ impl PickerDelegate for ModelPickerDelegate {
             return None;
         }
 
-        Some(ModelSelectorFooter::new(OpenSettings.boxed_clone(), focus_handle).into_any_element())
+        // Zed Vela: open the Configure Models dialog instead of the LLM Providers
+        // settings page.
+        Some(
+            ModelSelectorFooter::new(ConfigureModels.boxed_clone(), focus_handle)
+                .into_any_element(),
+        )
     }
 }
 

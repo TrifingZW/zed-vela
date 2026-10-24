@@ -3114,7 +3114,7 @@ impl Workspace {
                         .insert(project_path.clone());
                 }
 
-                history.insert(project_path, (fs_path, std::usize::MAX));
+                history.insert(project_path, (fs_path, usize::MAX));
             }
         }
 

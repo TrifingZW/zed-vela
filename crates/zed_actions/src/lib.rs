@@ -582,6 +582,9 @@ pub mod agent {
             /// Opens the agent settings UI.
             #[action(deprecated_aliases = ["agent::OpenConfiguration"])]
             OpenSettings,
+            /// Opens the Zed Vela model configuration dialog, which manages the LLM
+            /// providers used by the agent without leaving the agent panel.
+            ConfigureModels,
             /// Opens the agent onboarding modal.
             OpenOnboardingModal,
             /// Resets the agent onboarding state.

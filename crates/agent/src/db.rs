@@ -86,6 +86,30 @@ pub struct DbThread {
     /// [`crate::sandboxing::ThreadSandboxGrants`].
     #[serde(default)]
     pub sandbox_grants: DbSandboxGrants,
+    /// The branch tree of the conversation, so branches survive restarts.
+    /// Absent for threads saved by older versions and for trees that are still
+    /// in their initial single-node state.
+    #[serde(default)]
+    pub conversation_tree: Option<DbConversationTree>,
+}
+
+/// Persisted conversation tree: the node structure plus the messages of every
+/// branch. Restoring replays each branch's messages back into its node, so the
+/// whole tree (including inactive branches) is rebuilt when the thread is
+/// reopened.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbConversationTree {
+    pub active: u64,
+    pub nodes: Vec<acp_thread::SerializedConversationNode>,
+    pub branches: Vec<DbConversationBranch>,
+}
+
+/// The messages of a single branch node, keyed by its node id. The root
+/// (id 0) holds any messages that precede the first user turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbConversationBranch {
+    pub id: u64,
+    pub messages: Vec<Arc<DbMessage>>,
 }
 
 /// Serialized form of the sandbox permissions the user granted "for the rest of
@@ -169,6 +193,7 @@ impl SharedThread {
             ui_scroll_position: None,
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: DbSandboxGrants::default(),
+            conversation_tree: None,
         }
     }
 
@@ -355,6 +380,7 @@ impl DbThread {
             ui_scroll_position: None,
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: DbSandboxGrants::default(),
+            conversation_tree: None,
         })
     }
 }
@@ -971,6 +997,7 @@ mod tests {
             ui_scroll_position: None,
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: DbSandboxGrants::default(),
+            conversation_tree: None,
         }
     }
 

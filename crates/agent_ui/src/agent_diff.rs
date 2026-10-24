@@ -1483,6 +1483,11 @@ impl AgentDiff {
             | AcpThreadEvent::Refusal => {
                 self.update_reviewing_editors(workspace, window, cx);
             }
+            AcpThreadEvent::ConversationTreeChanged { transcript_reset } => {
+                if *transcript_reset {
+                    self.update_reviewing_editors(workspace, window, cx);
+                }
+            }
             AcpThreadEvent::TitleUpdated
             | AcpThreadEvent::ActivityConfirmedIdle
             | AcpThreadEvent::StatusChanged

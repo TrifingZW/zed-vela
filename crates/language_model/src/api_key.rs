@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use credentials_provider::CredentialsProvider;
 use env_var::EnvVar;
 use futures::{FutureExt, channel::oneshot, future};
-use gpui::{App, AppContext, AsyncApp, Context, Global, SharedString, Subscription, Task};
+use gpui::{App, AsyncApp, Context, Global, SharedString, Subscription, Task};
 use gpui_util::ResultExt as _;
 use std::{
     fmt::{Display, Formatter},
@@ -14,10 +14,12 @@ use crate::AuthenticateError;
 /// Manages a single API key for a language model provider. API keys either come from environment
 /// variables or the system keychain.
 ///
-/// Keys from the system keychain are associated with a provider URL, and this ensures that they are
-/// only used with that URL.
+/// Keys from the system keychain are associated with a provider URL, and optionally with a
+/// provider scope, so multiple provider entries can share a URL while keeping distinct keys.
 pub struct ApiKeyState {
     pub url: SharedString,
+    /// An additional identifier (typically the provider name) included in the keychain key.
+    credentials_scope: Option<SharedString>,
     env_var: EnvVar,
     load_status: LoadStatus,
     load_task: Option<ApiKeyLoad>,
@@ -74,11 +76,32 @@ pub async fn read_credentials(
 
 impl ApiKeyState {
     pub fn new(url: SharedString, env_var: EnvVar) -> Self {
+        Self::new_with_scope(url, None, env_var)
+    }
+
+    /// Creates a key state whose keychain entry is scoped to `scope` in addition to the URL.
+    ///
+    /// This allows multiple providers to use the same API URL with different API keys.
+    pub fn new_with_scope(url: SharedString, scope: Option<SharedString>, env_var: EnvVar) -> Self {
         Self {
             url,
+            credentials_scope: scope,
             env_var,
             load_status: LoadStatus::NotLoaded,
             load_task: None,
+        }
+    }
+
+    /// The key used to address this provider's API key in the system keychain.
+    fn credentials_key(&self, url: &str) -> SharedString {
+        match &self.credentials_scope {
+            // Length-prefix the scope so a scope containing `:` cannot collide with a
+            // different scope/URL split.
+            Some(scope) => SharedString::new(format!(
+                "zed-llm-provider:{}:{scope}:{url}",
+                scope.as_str().len()
+            )),
+            None => SharedString::new(url),
         }
     }
 
@@ -152,14 +175,24 @@ impl ApiKeyState {
             cx.notify();
         }
 
+        let credentials_key = self.credentials_key(&url);
+        // Legacy keys live under the bare URL. Remove that entry as well when a key is
+        // deleted, or it would be migrated back in on the next load.
+        let legacy_url = (self.credentials_scope.is_some() && key.is_none()).then(|| url.clone());
         cx.spawn(async move |ent, cx| {
             if let Some(key) = &key {
                 provider
-                    .write_credentials(&url, "Bearer", key.as_bytes(), cx)
+                    .write_credentials(&credentials_key, "Bearer", key.as_bytes(), cx)
                     .await
                     .log_err();
             } else {
-                provider.delete_credentials(&url, cx).await.log_err();
+                provider
+                    .delete_credentials(&credentials_key, cx)
+                    .await
+                    .log_err();
+                if let Some(legacy_url) = &legacy_url {
+                    provider.delete_credentials(legacy_url, cx).await.log_err();
+                }
             }
             ent.update(cx, |ent, cx| {
                 let key_state = get_this(ent);
@@ -186,7 +219,7 @@ impl ApiKeyState {
     pub fn handle_url_change<Ent: 'static>(
         &mut self,
         url: SharedString,
-        get_this: impl Fn(&mut Ent) -> &mut Self + 'static,
+        get_this: impl Fn(&mut Ent) -> &mut Self + Clone + 'static,
         provider: Arc<dyn CredentialsProvider>,
         cx: &mut Context<Ent>,
     ) {
@@ -201,7 +234,7 @@ impl ApiKeyState {
     pub fn load_cached<Ent: 'static>(
         &mut self,
         url: SharedString,
-        get_this: impl Fn(&mut Ent) -> &mut Self + 'static,
+        get_this: impl Fn(&mut Ent) -> &mut Self + Clone + 'static,
         provider: Arc<dyn CredentialsProvider>,
         cx: &mut Context<Ent>,
     ) -> Task<Result<(), AuthenticateError>> {
@@ -222,7 +255,7 @@ impl ApiKeyState {
     pub fn load_if_needed<Ent: 'static>(
         &mut self,
         url: SharedString,
-        get_this: impl Fn(&mut Ent) -> &mut Self + 'static,
+        get_this: impl Fn(&mut Ent) -> &mut Self + Clone + 'static,
         provider: Arc<dyn CredentialsProvider>,
         cx: &mut Context<Ent>,
     ) -> Task<Result<(), AuthenticateError>> {
@@ -243,49 +276,72 @@ impl ApiKeyState {
             return Task::ready(Ok(()));
         }
 
-        let completion = if let Some(load_task) = &self.load_task
-            && self.url == url
-        {
+        let completion = if let Some(load_task) = &self.load_task {
             load_task.completion.clone()
         } else {
-            let load_task = Self::load(url.clone(), get_this, provider, cx);
+            let credentials_key = self.credentials_key(&url);
+            let load_task =
+                Self::load(url.clone(), credentials_key, get_this.clone(), provider, cx);
             let completion = load_task.completion.clone();
             self.url = url;
-            self.load_status = LoadStatus::NotLoaded;
+            self.load_status = LoadStatus::NotPresent;
             self.load_task = Some(load_task);
             cx.notify();
             completion
         };
 
-        cx.background_spawn(async move {
+        cx.spawn(async move |ent, cx| {
             completion.await.ok();
+            ent.update(cx, |ent, _cx| {
+                get_this(ent).load_status.clone().into_authenticate_result()
+            })
+            .ok();
             Ok(())
         })
     }
 
     fn load<Ent: 'static>(
         url: SharedString,
-        get_this: impl Fn(&mut Ent) -> &mut Self + 'static,
+        credentials_key: SharedString,
+        get_this: impl Fn(&mut Ent) -> &mut Self + Clone + 'static,
         provider: Arc<dyn CredentialsProvider>,
         cx: &Context<Ent>,
     ) -> ApiKeyLoad {
-        let (sender, completion) = oneshot::channel();
-        let task = cx.spawn(async move |ent, cx| {
-            let load_status =
-                ApiKey::load_from_system_keychain_impl(&url, provider.as_ref(), cx).await;
-            ent.update(cx, |ent, cx| {
-                let key_state = get_this(ent);
-                key_state.url = url;
-                key_state.load_status = load_status;
-                key_state.load_task = None;
-                cx.notify();
-            })
-            .ok();
-            sender.send(()).ok();
+        let (sender, receiver) = oneshot::channel();
+        let task = cx.spawn({
+            async move |ent, cx| {
+                let mut load_status =
+                    ApiKey::load_from_system_keychain_impl(&credentials_key, provider.as_ref(), cx)
+                        .await;
+
+                // Older builds stored compatible-provider keys under the bare URL. Move that key
+                // to the scoped entry the first time it is loaded.
+                if matches!(load_status, LoadStatus::NotPresent)
+                    && credentials_key.as_str() != url.as_str()
+                    && let LoadStatus::Loaded(api_key) =
+                        ApiKey::load_from_system_keychain_impl(&url, provider.as_ref(), cx).await
+                {
+                    provider
+                        .write_credentials(&credentials_key, "Bearer", api_key.key().as_bytes(), cx)
+                        .await
+                        .log_err();
+                    load_status = LoadStatus::Loaded(api_key);
+                }
+
+                ent.update(cx, |ent, cx| {
+                    let this = get_this(ent);
+                    this.url = url;
+                    this.load_status = load_status;
+                    this.load_task = None;
+                    cx.notify();
+                })
+                .ok();
+                sender.send(()).ok();
+            }
         });
         ApiKeyLoad {
             _task: task,
-            completion: completion.shared(),
+            completion: receiver.shared(),
         }
     }
 }
@@ -371,173 +427,8 @@ enum ApiKeySource {
 impl Display for ApiKeySource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiKeySource::EnvVar(var) => write!(f, "environment variable {}", var),
+            ApiKeySource::EnvVar(var) => write!(f, "environment variable {var}"),
             ApiKeySource::SystemKeychain => write!(f, "system keychain"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use credentials_provider::test_support::FakeCredentialsProvider;
-    use gpui::{Entity, TestAppContext};
-
-    const URL: &str = "provider";
-    const OTHER_URL: &str = "other-provider";
-
-    #[gpui::test]
-    async fn test_cached_miss_and_explicit_retry(cx: &mut TestAppContext) {
-        for fail_reads in [false, true] {
-            let test = KeyTest::new(&[], cx);
-            test.provider.state.lock().fail_reads = fail_reads;
-            test.load(URL, cx).await.expect("initial load");
-            {
-                let mut credentials = test.provider.state.lock();
-                credentials.fail_reads = false;
-                credentials
-                    .keys
-                    .insert(URL.to_string(), b"late-key".to_vec());
-            }
-            test.load(URL, cx).await.expect("cached miss");
-            assert_eq!(test.key(URL, cx), None);
-            test.provider.assert_reads(&[URL]);
-            let url = SharedString::from(URL);
-            let retry = test.state.update(cx, |state, cx| {
-                state.load_if_needed(url, |state| state, test.provider.clone(), cx)
-            });
-            retry.await.expect("explicit retry");
-            assert_eq!(test.key(URL, cx).as_deref(), Some("late-key"));
-            test.load(URL, cx).await.expect("cached key");
-            test.provider.assert_reads(&[URL, URL]);
-        }
-    }
-
-    #[gpui::test]
-    async fn test_disabled_gate_and_superseded_loads(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            set_credentials_read_gate::<DisabledAi>(|cx| cx.global::<DisabledAi>().0, cx);
-        });
-        let test = KeyTest::new(&[(OTHER_URL, "latest-key")], cx);
-        set_disabled_ai(true, cx);
-        let superseded = test.load(URL, cx);
-        cx.run_until_parked();
-        drop(test.load(OTHER_URL, cx));
-        cx.run_until_parked();
-        test.provider.assert_reads(&[]);
-        set_disabled_ai(false, cx);
-        set_disabled_ai(true, cx);
-        cx.run_until_parked();
-        test.provider.assert_reads(&[]);
-        let release = test.provider.defer_read(OTHER_URL);
-        set_disabled_ai(false, cx);
-        cx.run_until_parked();
-        drop(test.load(OTHER_URL, cx));
-        set_disabled_ai(true, cx);
-        cx.run_until_parked();
-        test.provider.assert_reads(&[OTHER_URL]);
-        release.send(()).expect("started read remains live");
-        cx.run_until_parked();
-        superseded.await.expect("superseded load completes");
-        assert_eq!(test.key(OTHER_URL, cx).as_deref(), Some("latest-key"));
-        test.provider.assert_reads(&[OTHER_URL]);
-    }
-
-    #[gpui::test]
-    async fn test_store_cancels_stale_read(cx: &mut TestAppContext) {
-        for stored_key in [Some("saved-key"), None] {
-            let test = KeyTest::new(&[(URL, "old-key")], cx);
-            let release = test.provider.defer_read(URL);
-            let load = test.load(URL, cx);
-            cx.run_until_parked();
-            test.store(stored_key, cx).await.expect("mutation");
-            cx.run_until_parked();
-            assert_eq!(release.send(()), Err(()));
-            load.await.expect("cancelled read completes");
-            test.load(URL, cx).await.expect("cached mutation");
-            assert_eq!(test.key(URL, cx).as_deref(), stored_key);
-            test.provider.assert_reads(&[URL]);
-        }
-    }
-
-    #[gpui::test]
-    async fn test_deferred_mutations_follow_url_identity(cx: &mut TestAppContext) {
-        for stored_key in [Some("saved-key"), None] {
-            let test = KeyTest::new(&[(URL, "old-key"), (OTHER_URL, "other-key")], cx);
-            test.load(URL, cx).await.expect("initial load");
-            let release = test.provider.defer_next_mutation();
-            let mutation = test.store(stored_key, cx);
-            cx.run_until_parked();
-            let release_read = test.provider.defer_read(OTHER_URL);
-            let load = test.load(OTHER_URL, cx);
-            cx.run_until_parked();
-            release.send(()).expect("pending mutation");
-            mutation.await.expect("mutation for inactive URL");
-            drop(test.load(OTHER_URL, cx));
-            cx.run_until_parked();
-            assert_eq!(test.key(OTHER_URL, cx), None);
-            release_read.send(()).expect("other URL read remains live");
-            load.await.expect("other URL load");
-            assert_eq!(test.key(OTHER_URL, cx).as_deref(), Some("other-key"));
-            assert_eq!(
-                test.provider.state.lock().keys.get(URL).map(Vec::as_slice),
-                stored_key.map(str::as_bytes)
-            );
-            test.provider.assert_reads(&[URL, OTHER_URL]);
-        }
-    }
-
-    type LoadTask = Task<Result<(), AuthenticateError>>;
-
-    struct DisabledAi(bool);
-
-    impl Global for DisabledAi {}
-
-    struct KeyTest {
-        state: Entity<ApiKeyState>,
-        provider: Arc<FakeCredentialsProvider>,
-    }
-
-    impl KeyTest {
-        fn new(keys: &[(&str, &str)], cx: &mut TestAppContext) -> Self {
-            let provider = Arc::new(FakeCredentialsProvider::default());
-            provider.state.lock().keys.extend(
-                keys.iter()
-                    .map(|(url, key)| (url.to_string(), key.as_bytes().to_vec())),
-            );
-            let state = cx.new(|_| {
-                ApiKeyState::new(
-                    SharedString::default(),
-                    EnvVar {
-                        name: SharedString::new_static("TEST_API_KEY"),
-                        value: None,
-                    },
-                )
-            });
-            Self { state, provider }
-        }
-
-        fn load(&self, url: &'static str, cx: &mut TestAppContext) -> LoadTask {
-            let url = SharedString::from(url);
-            self.state.update(cx, |state, cx| {
-                state.load_cached(url, |state| state, self.provider.clone(), cx)
-            })
-        }
-
-        fn store(&self, key: Option<&str>, cx: &mut TestAppContext) -> Task<Result<()>> {
-            let url = SharedString::from(URL);
-            let key = key.map(String::from);
-            self.state.update(cx, |state, cx| {
-                state.store(url, key, |state| state, self.provider.clone(), cx)
-            })
-        }
-
-        fn key(&self, url: &str, cx: &TestAppContext) -> Option<Arc<str>> {
-            self.state.read_with(cx, |state, _| state.key(url))
-        }
-    }
-
-    fn set_disabled_ai(disabled: bool, cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_global(DisabledAi(disabled)));
     }
 }

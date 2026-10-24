@@ -466,6 +466,8 @@ Models also support the optional `default_temperature`, `extra_beta_headers` (se
 
 Enter the API key in the provider settings UI or set the generated environment variable (`<PROVIDER_NAME>_API_KEY`; in the example above, `SOME_PROVIDER_API_KEY`). Do not put API keys in `settings.json`.
 
+API keys are stored per provider name and API URL, so you can add multiple provider entries with the same `api_url` to use different accounts.
+
 ### OpenAI-Compatible Endpoints {#openai-compatible}
 
 Use an OpenAI-compatible endpoint when you have a custom base URL, model ID, and API key.
@@ -571,3 +573,5 @@ For example, a chat-completions endpoint with the maximum OpenAI-style reasoning
 ```
 
 Enter the API key in the provider settings UI or set the generated environment variable. Do not put API keys in `settings.json`.
+
+API keys are stored per provider name and API URL, so you can add multiple provider entries with the same `api_url` to use different accounts.

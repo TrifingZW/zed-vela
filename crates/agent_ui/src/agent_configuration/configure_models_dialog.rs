@@ -1078,7 +1078,7 @@ impl ConfigureModelsDialog {
                 if editing {
                     "Provider names cannot be changed after creation."
                 } else {
-                    "A unique name used to identify this provider."
+                    "A unique name used to identify this provider. Use another name to add a second account for the same API URL."
                 },
                 &form.provider_name,
                 !editing,

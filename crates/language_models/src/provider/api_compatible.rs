@@ -40,10 +40,12 @@ impl<S: ApiCompatibleProviderSettings> ApiCompatibleProviderState<S> {
             .detach();
 
             let settings = resolve_settings(&id, cx).cloned().unwrap_or_default();
+            let api_key_scope = SharedString::new(id.as_ref());
             Self {
                 id,
-                api_key_state: ApiKeyState::new(
+                api_key_state: ApiKeyState::new_with_scope(
                     SharedString::new(settings.api_url()),
+                    Some(api_key_scope),
                     EnvVar::new(api_key_env_var_name),
                 ),
                 settings,

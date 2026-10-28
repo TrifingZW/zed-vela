@@ -5,8 +5,7 @@ use gpui::{
 };
 use language::LanguageRegistry;
 use std::sync::Arc;
-use ui::prelude::*;
-use ui::{h_flex, v_flex};
+use ui::{Tab, h_flex, prelude::*, v_flex};
 
 pub struct PaneSearchBarCallbacks {
     pub setup_search_bar:
@@ -112,6 +111,7 @@ impl Render for Toolbar {
             return div();
         }
 
+        let has_secondary_items = self.secondary_items().count() > 0;
         let secondary_items = self.secondary_items().map(|item| item.to_any());
 
         let has_left_items = self.left_items().count() > 0;
@@ -120,24 +120,25 @@ impl Render for Toolbar {
         v_flex()
             .group("toolbar")
             .relative()
-            .py(DynamicSpacing::Base06.rems(cx))
-            .px(DynamicSpacing::Base08.rems(cx))
-            .when(has_left_items || has_right_items, |this| {
-                this.gap(DynamicSpacing::Base06.rems(cx))
-            })
             .border_b_2()
             .border_color(cx.theme().colors().border_variant)
             .bg(cx.theme().colors().toolbar_background)
             .when(has_left_items || has_right_items, |this| {
+                // Matches the agent panel toolbar: a fixed row height with the
+                // same 4px horizontal inset and no vertical padding.
                 this.child(
                     h_flex()
-                        .items_start()
+                        .h(Tab::content_height(cx))
+                        .flex_shrink_0()
+                        .items_center()
                         .justify_between()
-                        .gap(DynamicSpacing::Base08.rems(cx))
+                        .gap(DynamicSpacing::Base04.rems(cx))
+                        .px(DynamicSpacing::Base04.rems(cx))
                         .when(has_left_items, |this| {
                             this.child(
                                 h_flex()
-                                    .min_h_8()
+                                    .h_full()
+                                    .items_center()
                                     .flex_auto()
                                     .justify_start()
                                     .overflow_x_hidden()
@@ -147,7 +148,8 @@ impl Render for Toolbar {
                         .when(has_right_items, |this| {
                             this.child(
                                 h_flex()
-                                    .h_8()
+                                    .h_full()
+                                    .items_center()
                                     .flex_row_reverse()
                                     .when(has_left_items, |this| this.flex_none())
                                     .justify_end()
@@ -156,7 +158,14 @@ impl Render for Toolbar {
                         }),
                 )
             })
-            .children(secondary_items)
+            .when(has_secondary_items, |this| {
+                this.child(
+                    v_flex()
+                        .py(DynamicSpacing::Base06.rems(cx))
+                        .px(DynamicSpacing::Base08.rems(cx))
+                        .children(secondary_items),
+                )
+            })
     }
 }
 

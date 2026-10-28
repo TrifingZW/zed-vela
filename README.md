@@ -1,51 +1,34 @@
-> [!IMPORTANT]
-> Remove this line to confirm you've reviewed this PR before submitting.
+# Zed Vela
 
-# Zed
+Zed Vela 是 Zed 编辑器的一个分支。它不另起炉灶，而是站在 Zed 的肩膀上，以变基的方式紧随官方上游，把每一次同步都当作一次吸收，把每一处定制都留成自己的性格。
 
-[![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
-[![CI](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml)
+## 特性
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+- 精简系统提示词
+- 将所有 Border 改为 2px
+- 构建配置设为最优，同时编译时长最长
+- 更改品牌为 Zed Vela
+- 树图上下文管理
+- 独立的 LLM 提供商配置面板
+- 支持多个相同提供商
+- 将编辑器的工具栏变得紧凑
 
----
+## 行为
 
-### Installation
+与官方 Zed 混用时，请留意以下数据归属：
 
-On macOS, Linux, and Windows you can [download Zed directly](https://zed.dev/download) or install Zed via your local package manager ([macOS](https://zed.dev/docs/installation#macos)/[Linux](https://zed.dev/docs/linux#installing-via-a-package-manager)/[Windows](https://zed.dev/docs/windows#package-managers)).
+- 用户目录未改名（Windows 下为 `%APPDATA%\Zed` 与 `%LOCALAPPDATA%\Zed`），settings.json、键位、线程数据库、扩展与语言服务器均与官方共用
+- 单实例互斥锁与更新通道相互独立，两版可以同时运行，但会并发写同一批文件，以最后写入者为准
+- 树状上下文仅 Vela 读写；官方版本保存同一线程时会丢弃分支结构，只保留当前分支
+- 兼容提供商的 API Key 按提供商名称独立保存，与官方按 URL 保存的密钥互不覆盖；旧密钥首次加载时自动迁移，在 Vela 中重置则会连带清理旧条目
+- 如需完全隔离，可用 `--user-data-dir` 指定独立的数据目录
 
-Other platforms are not yet available:
+## 开发
 
-- Web ([tracking discussion](https://github.com/zed-industries/zed/discussions/26195))
+- [在 macOS 上构建](./docs/src/development/macos.md)
+- [在 Linux 上构建](./docs/src/development/linux.md)
+- [在 Windows 上构建](./docs/src/development/windows.md)
 
-### Developing Zed
+## 许可
 
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
-
-### Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
-
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
-
-### Licensing
-
-Zed source code is licensed primarily under GPL-3.0-or-later, with Apache-2.0 components where marked.
-
-License information for third party dependencies must be correctly provided for CI to pass.
-
-We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automatically comply with open source licenses. If CI is failing, check the following:
-
-- Is it showing a `no license specified` error for a crate you've created? If so, add `publish = false` under `[package]` in your crate's Cargo.toml.
-- Is the error `failed to satisfy license requirements` for a dependency? If so, first determine what license the project has and whether this system is sufficient to comply with this license's requirements. If you're unsure, ask a lawyer. Once you've verified that this system is acceptable add the license's SPDX identifier to the `accepted` array in `script/licenses/zed-licenses.toml`.
-- Is `cargo-about` unable to find the license for a dependency? If so, add a clarification field at the end of `script/licenses/zed-licenses.toml`, as specified in the [cargo-about book](https://embarkstudios.github.io/cargo-about/cli/generate/config.html#crate-configuration).
-
-## Sponsorship
-
-Zed is developed by **Zed Industries, Inc.**, a for-profit company.
-
-If you’d like to financially support the project, you can do so via GitHub Sponsors.
-Sponsorships go directly to Zed Industries and are used as general company revenue.
-There are no perks or entitlements associated with sponsorship.
+Zed Vela 源自 Zed，源代码主要遵循 GPL-3.0-or-later，部分标注为 Apache-2.0 的组件以其标注为准。感谢 Zed Industries 与开源社区的每一份馈赠。

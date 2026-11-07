@@ -2890,7 +2890,7 @@ impl Element for MarkdownElement {
                                     {
                                         parent_container = parent_container
                                             .rounded_md()
-                                            .border_1()
+                                            .border_2()
                                             .border_color(cx.theme().colors().border_variant);
                                     }
 

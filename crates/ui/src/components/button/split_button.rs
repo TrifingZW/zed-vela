@@ -76,7 +76,7 @@ impl RenderOnce for SplitButton {
         );
 
         let outline = BoxShadow::new(px(0.), px(0.), cx.theme().colors().border.opacity(0.8))
-            .spread_radius(px(1.))
+            .spread_radius(px(2.))
             .inset();
 
         h_flex()

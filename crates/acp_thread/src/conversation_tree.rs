@@ -441,6 +441,35 @@ impl ConversationTree {
         }
     }
 
+    /// Removes `id` together with its descendants. When the active node is
+    /// part of the removed subtree, the transcript is rebuilt from the
+    /// surviving ancestor and `true` is returned so the caller can synchronize
+    /// the agent session; otherwise the transcript is left untouched.
+    pub(crate) fn remove_branch(
+        &mut self,
+        id: ConversationNodeId,
+        entries: &mut Vec<AgentThreadEntry>,
+    ) -> Result<bool> {
+        if id == self.root {
+            bail!("The main conversation node cannot be removed");
+        }
+        let Some(node) = self.nodes.get(&id) else {
+            bail!("Conversation branch not found");
+        };
+        let fallback = node.parent.unwrap_or(self.root);
+
+        let active_removed = self.path_to(self.active).contains(&id);
+        if active_removed {
+            self.take_active_entries(entries);
+        }
+        self.remove_subtree(id);
+        if active_removed {
+            self.active = fallback;
+            self.load_active_path(entries);
+        }
+        Ok(active_removed)
+    }
+
     /// Replaces the whole tree with a restored structure. Entries are not
     /// restored here; the caller replays per-node messages back into the
     /// transcript, which repopulates the nodes.
@@ -923,5 +952,94 @@ mod tests {
             .materialize(nephew, &mut entries)
             .expect("materialized nephew");
         assert_eq!(entry_ids(&entries), vec!["a1", "c1", "d1", "d2"]);
+    }
+
+    #[test]
+    fn removing_an_inactive_branch_drops_its_subtree() {
+        let mut tree = ConversationTree::new();
+        let mut entries = Vec::new();
+
+        tree.begin_user_turn("First".into());
+        entries.push(entry("a1"));
+        tree.record_entry_push();
+        let first = tree.active_node();
+
+        let sibling = tree
+            .create_branch(first, "Sibling".into())
+            .expect("sibling created");
+        tree.materialize(sibling, &mut entries)
+            .expect("materialized sibling");
+        entries.push(entry("c1"));
+        tree.record_entry_push();
+
+        let nested = tree
+            .create_branch(sibling, "Nested".into())
+            .expect("nested branch created");
+        tree.materialize(nested, &mut entries)
+            .expect("materialized nested branch");
+        entries.push(entry("d1"));
+        tree.record_entry_push();
+
+        let second = tree
+            .create_branch(first, "Second".into())
+            .expect("second branch created");
+        tree.materialize(second, &mut entries)
+            .expect("materialized second branch");
+        entries.push(entry("b1"));
+        tree.record_entry_push();
+        let active = tree.active_node();
+
+        let active_changed = tree
+            .remove_branch(sibling, &mut entries)
+            .expect("removed inactive branch");
+
+        assert!(!active_changed);
+        assert_eq!(tree.active_node(), active);
+        assert_eq!(entry_ids(&entries), vec!["a1", "b1"]);
+        assert!(tree.node(sibling).is_none());
+        assert!(
+            tree.node(nested).is_none(),
+            "descendants of a removed branch must be removed with it"
+        );
+        assert!(tree.node(active).is_some());
+    }
+
+    #[test]
+    fn removing_the_active_branch_falls_back_to_its_parent() {
+        let mut tree = ConversationTree::new();
+        let mut entries = Vec::new();
+
+        tree.begin_user_turn("First".into());
+        entries.push(entry("a1"));
+        tree.record_entry_push();
+        let first = tree.active_node();
+
+        tree.begin_user_turn("Second".into());
+        entries.push(entry("b1"));
+        tree.record_entry_push();
+        let second = tree.active_node();
+
+        let active_changed = tree
+            .remove_branch(second, &mut entries)
+            .expect("removed active branch");
+
+        assert!(active_changed);
+        assert_eq!(tree.active_node(), first);
+        assert_eq!(entry_ids(&entries), vec!["a1"]);
+        assert!(tree.node(second).is_none());
+    }
+
+    #[test]
+    fn removing_the_root_branch_is_rejected() {
+        let mut tree = ConversationTree::new();
+        let mut entries = Vec::new();
+
+        let error = tree
+            .remove_branch(tree.root, &mut entries)
+            .expect_err("the main node cannot be removed");
+
+        assert!(error.to_string().contains("main conversation node"));
+        assert_eq!(tree.node_count(), 1);
+        assert_eq!(tree.active_node(), tree.root);
     }
 }

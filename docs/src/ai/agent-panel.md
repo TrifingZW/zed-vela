@@ -55,6 +55,17 @@ If two threads might edit the same files, you can isolate one in a new Git workt
 
 For more details on the Threads Sidebar and managing multiple projects, see [Parallel Agents](./parallel-agents.md).
 
+### Conversation Tree {#conversation-tree}
+
+Editing an earlier message creates a branch instead of discarding the old turn. The conversation tree button in the Agent Panel toolbar shows those branches as a graph: click a node to switch the thread to that branch, right-drag to pan, and scroll to zoom.
+
+Right-click a node to open its context menu:
+
+- **New Thread from This Branch** opens a new thread containing only the messages leading to that node, leaving the original thread untouched.
+- **Delete Branch** removes the node and all of its descendants from the tree. Deleting the active branch falls back to the node's parent; the root node cannot be deleted.
+
+While the agent is generating a response, both actions are disabled until it finishes.
+
 ### Editing Messages {#editing-messages}
 
 Any message that you send to the model is editable.

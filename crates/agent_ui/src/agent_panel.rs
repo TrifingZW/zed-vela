@@ -79,10 +79,11 @@ use fs::Fs;
 use futures::FutureExt as _;
 use gpui::{
     Action, Anchor, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, Bounds,
-    ClipboardItem, DispatchPhase, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    KeyContext, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformDisplay,
-    Point as GpuiPoint, ScrollDelta, ScrollEvent, Subscription, Task, TaskExt, WeakEntity,
-    WindowHandle, canvas, point, prelude::*, pulsating_between, rems,
+    ClipboardItem, DismissEvent, DispatchPhase, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, KeyContext, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    PlatformDisplay, Point as GpuiPoint, ScrollDelta, ScrollEvent, Subscription, Task, TaskExt,
+    WeakEntity, WindowHandle, anchored, canvas, deferred, point, prelude::*, pulsating_between,
+    rems,
 };
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
@@ -1129,6 +1130,22 @@ struct BranchGraphZoomAnchor {
     graph_position: GpuiPoint<Pixels>,
 }
 
+/// A right-press on a branch node. It becomes a context menu when the button
+/// is released without moving; a moving press is a pan drag instead.
+#[derive(Clone, Copy)]
+struct BranchGraphMenuCandidate {
+    node: acp_thread::ConversationNodeId,
+    position: GpuiPoint<Pixels>,
+}
+
+/// The deployed branch-node context menu. It lives at the panel root so it
+/// draws above the graph overlay.
+struct DeployedBranchGraphContextMenu {
+    menu: Entity<ContextMenu>,
+    position: GpuiPoint<Pixels>,
+    _subscription: Subscription,
+}
+
 pub struct AgentPanel {
     workspace: WeakEntity<Workspace>,
     /// Workspace id is used as a database key
@@ -1177,6 +1194,8 @@ pub struct AgentPanel {
     branch_graph_pan_origin: Option<GpuiPoint<Pixels>>,
     branch_graph_viewport_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     branch_graph_error: Option<SharedString>,
+    branch_graph_menu_candidate: Option<BranchGraphMenuCandidate>,
+    branch_graph_context_menu: Option<DeployedBranchGraphContextMenu>,
     _branch_graph_observation: Option<Subscription>,
 
     is_active: bool,
@@ -1609,6 +1628,8 @@ impl AgentPanel {
             branch_graph_pan_origin: None,
             branch_graph_viewport_bounds: Rc::new(Cell::new(None)),
             branch_graph_error: None,
+            branch_graph_menu_candidate: None,
+            branch_graph_context_menu: None,
             _branch_graph_observation: None,
             is_active: false,
         };
@@ -4453,6 +4474,9 @@ impl AgentPanel {
     }
 
     fn refresh_branch_graph_observation(&mut self, cx: &mut Context<Self>) {
+        // A deployed node menu belongs to the thread it was opened on.
+        self.branch_graph_menu_candidate = None;
+        self.branch_graph_context_menu = None;
         if !self.branch_graph_open {
             self._branch_graph_observation = None;
             return;
@@ -4469,6 +4493,8 @@ impl AgentPanel {
             self.branch_graph_open = false;
             self.branch_graph_error = None;
             self.branch_graph_pan_origin = None;
+            self.branch_graph_menu_candidate = None;
+            self.branch_graph_context_menu = None;
             self.settle_branch_graph_zoom();
             self._branch_graph_observation = None;
             cx.notify();
@@ -6326,6 +6352,8 @@ impl AgentPanel {
                                                 this.branch_graph_error = None;
                                             } else {
                                                 this.branch_graph_pan_origin = None;
+                                                this.branch_graph_menu_candidate = None;
+                                                this.branch_graph_context_menu = None;
                                                 this.settle_branch_graph_zoom();
                                             }
                                             this.refresh_branch_graph_observation(cx);
@@ -6418,6 +6446,7 @@ impl AgentPanel {
         let muted = colors.text_muted;
         let viewport_bounds_cell = self.branch_graph_viewport_bounds.clone();
         let pan_entity = cx.entity();
+        let context_menu_thread = thread.clone();
         let is_dragging = self.branch_graph_pan_origin.is_some();
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
@@ -6485,7 +6514,7 @@ impl AgentPanel {
                             })
                             .child(div().flex_1())
                             .child(
-                                Label::new("Right-drag to pan · Scroll to zoom")
+                                Label::new("Right-click a node · Right-drag to pan · Scroll to zoom")
                                     .size(LabelSize::XSmall)
                                     .color(Color::Muted)
                                     .truncate(),
@@ -6530,6 +6559,8 @@ impl AgentPanel {
                                         this.branch_graph_open = false;
                                         this.branch_graph_error = None;
                                         this.branch_graph_pan_origin = None;
+                                        this.branch_graph_menu_candidate = None;
+                                        this.branch_graph_context_menu = None;
                                         this.settle_branch_graph_zoom();
                                         this._branch_graph_observation = None;
                                         cx.notify();
@@ -6550,6 +6581,11 @@ impl AgentPanel {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    // A right-press that does not land on a branch node must
+                    // not reuse a candidate left behind by an earlier press.
+                    this.branch_graph_menu_candidate = this
+                        .branch_graph_menu_candidate
+                        .filter(|candidate| candidate.position == event.position);
                     this.settle_branch_graph_zoom();
                     this.branch_graph_pan_origin = Some(event.position);
                     window.prevent_default();
@@ -6561,6 +6597,7 @@ impl AgentPanel {
                 MouseButton::Right,
                 cx.listener(|this, _, _window, cx| {
                     this.branch_graph_pan_origin = None;
+                    this.branch_graph_menu_candidate = None;
                     cx.notify();
                 }),
             )
@@ -6568,6 +6605,7 @@ impl AgentPanel {
                 MouseButton::Right,
                 cx.listener(|this, _, _window, cx| {
                     this.branch_graph_pan_origin = None;
+                    this.branch_graph_menu_candidate = None;
                     cx.notify();
                 }),
             )
@@ -6635,22 +6673,44 @@ impl AgentPanel {
                                 };
                                 this.branch_graph_pan += event.position - last;
                                 this.branch_graph_pan_origin = Some(event.position);
+                                if let Some(candidate) = this.branch_graph_menu_candidate {
+                                    let delta = event.position - candidate.position;
+                                    let horizontal: f32 = delta.x.into();
+                                    let vertical: f32 = delta.y.into();
+                                    // Dragging pans the graph; only a press that
+                                    // stayed in place opens the node menu.
+                                    if horizontal.abs() > 3.0 || vertical.abs() > 3.0 {
+                                        this.branch_graph_menu_candidate = None;
+                                    }
+                                }
                                 cx.notify();
                             });
                         });
 
                         // Clear the drag state from the window as well, so a release
                         // outside the viewport (or outside the window) cannot leave a
-                        // stale grab in place.
+                        // stale grab in place. A press that did not move becomes the
+                        // node context menu.
                         let up_entity = pan_entity.clone();
-                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                        let menu_thread = context_menu_thread.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                             if phase != DispatchPhase::Capture || event.button != MouseButton::Right
                             {
                                 return;
                             }
+                            let menu_thread = menu_thread.clone();
                             up_entity.update(cx, |this, cx| {
-                                if this.branch_graph_pan_origin.take().is_some() {
-                                    cx.notify();
+                                let was_panning = this.branch_graph_pan_origin.take().is_some();
+                                match this.branch_graph_menu_candidate.take() {
+                                    Some(candidate) => this.deploy_branch_graph_context_menu(
+                                        &menu_thread,
+                                        candidate.node,
+                                        event.position,
+                                        window,
+                                        cx,
+                                    ),
+                                    None if was_panning => cx.notify(),
+                                    None => {}
                                 }
                             });
                         });
@@ -6726,6 +6786,18 @@ impl AgentPanel {
                         this.switch_branch_from_graph(&thread, id, active_id, cx);
                     }
                 }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                        // The viewport still starts panning on the press; the
+                        // candidate is discarded if the pointer moves.
+                        this.branch_graph_menu_candidate = Some(BranchGraphMenuCandidate {
+                            node: id,
+                            position: event.position,
+                        });
+                        cx.notify();
+                    }),
+                )
                 .child(
                     div()
                         .w_full()
@@ -6823,6 +6895,195 @@ impl AgentPanel {
                 cx.notify();
             }
         }
+    }
+
+    fn deploy_branch_graph_context_menu(
+        &mut self,
+        thread: &Entity<AcpThread>,
+        node: acp_thread::ConversationNodeId,
+        position: GpuiPoint<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.branch_graph_open {
+            return;
+        }
+        let (exists, is_root, can_edit) = {
+            let thread = thread.read(cx);
+            let tree = thread.conversation_tree();
+            (
+                tree.branches().iter().any(|branch| branch.id == node),
+                node.as_u64() == 0,
+                thread.can_edit_conversation_tree(),
+            )
+        };
+        if !exists {
+            return;
+        }
+
+        let can_mutate = can_edit && !is_root;
+        let panel = cx.entity();
+        let focus_handle = self.focus_handle.clone();
+
+        let fork_entry = ContextMenuEntry::new("New Thread from This Branch")
+            .icon(IconName::Plus)
+            .icon_color(Color::Muted)
+            .disabled(!can_mutate)
+            .handler({
+                let panel = panel.clone();
+                let thread = thread.clone();
+                move |window, cx| {
+                    panel.update(cx, |this, cx| {
+                        this.fork_thread_from_node(thread.clone(), node, window, cx);
+                    });
+                }
+            });
+
+        let delete_entry = ContextMenuEntry::new("Delete Branch")
+            .icon(IconName::Trash)
+            .icon_color(Color::Error)
+            .disabled(!can_mutate)
+            .handler({
+                let panel = panel.clone();
+                let thread = thread.clone();
+                move |_window, cx| {
+                    panel.update(cx, |this, cx| {
+                        this.delete_branch_from_graph(&thread, node, cx);
+                    });
+                }
+            });
+
+        let menu = ContextMenu::build(window, cx, move |menu, _, _| {
+            menu.context(focus_handle)
+                .header("Conversation Branch")
+                .item(fork_entry)
+                .separator()
+                .item(delete_entry)
+        });
+
+        window.focus(&menu.focus_handle(cx), cx);
+        let subscription = cx.subscribe(&menu, |this, _, _: &DismissEvent, cx| {
+            this.branch_graph_context_menu = None;
+            cx.notify();
+        });
+        self.branch_graph_context_menu = Some(DeployedBranchGraphContextMenu {
+            menu,
+            position,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Removes a branch from the conversation tree along with everything
+    /// below it. Deleting the active branch falls back to its parent.
+    fn delete_branch_from_graph(
+        &mut self,
+        thread: &Entity<AcpThread>,
+        node: acp_thread::ConversationNodeId,
+        cx: &mut Context<Self>,
+    ) {
+        match thread.update(cx, |thread, cx| thread.remove_conversation_node(node, cx)) {
+            Ok(()) => {
+                self.branch_graph_error = None;
+                cx.notify();
+            }
+            Err(error) => {
+                self.branch_graph_error = Some(SharedString::from(error.to_string()));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Persists a copy of the thread that keeps only the branch leading to
+    /// `node`, then opens it as its own thread.
+    fn fork_thread_from_node(
+        &mut self,
+        thread: Entity<AcpThread>,
+        node: acp_thread::ConversationNodeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conversation_view) = self.active_conversation_view().cloned() else {
+            self.report_branch_graph_error("No active thread", cx);
+            return;
+        };
+        let Some(connection) = conversation_view.read(cx).as_native_connection(cx) else {
+            self.report_branch_graph_error(
+                "Forking a branch is only available for the native agent",
+                cx,
+            );
+            return;
+        };
+        let session_id = thread.read(cx).session_id().clone();
+        let Some(source_thread) = connection.thread(&session_id, cx) else {
+            self.report_branch_graph_error("The conversation thread is not available", cx);
+            return;
+        };
+        let Some(db_thread) = source_thread.update(cx, |source_thread, cx| {
+            source_thread.fork_db_thread_for_node(node, cx)
+        }) else {
+            self.report_branch_graph_error("Conversation branch not found", cx);
+            return;
+        };
+
+        let new_session_id = acp_v2::SessionId::new(uuid::Uuid::new_v4().to_string());
+        let folder_paths = PathList::new(
+            &self
+                .project
+                .read(cx)
+                .visible_worktrees(cx)
+                .map(|worktree| worktree.read(cx).abs_path().to_path_buf())
+                .collect::<Vec<_>>(),
+        );
+        let thread_store = self.thread_store.clone();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let db_thread = db_thread.await;
+            let title = db_thread.title.clone();
+            thread_store
+                .update(&mut cx.clone(), |store, cx| {
+                    store.save_thread(new_session_id.clone(), db_thread, folder_paths, cx)
+                })
+                .await?;
+
+            this.update_in(cx, |this, window, cx| {
+                this.branch_graph_open = false;
+                this.branch_graph_error = None;
+                this.branch_graph_pan_origin = None;
+                this.branch_graph_menu_candidate = None;
+                this.branch_graph_context_menu = None;
+                this.settle_branch_graph_zoom();
+                this._branch_graph_observation = None;
+                this.open_thread(new_session_id, None, Some(title), window, cx);
+                cx.notify();
+            })?;
+
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
+    fn report_branch_graph_error(
+        &mut self,
+        message: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.branch_graph_error = Some(message.into());
+        cx.notify();
+    }
+
+    /// Renders the deployed branch-node context menu above the graph overlay.
+    fn render_branch_graph_context_menu(&self) -> Option<AnyElement> {
+        let context_menu = self.branch_graph_context_menu.as_ref()?;
+        Some(
+            deferred(
+                anchored()
+                    .position(context_menu.position)
+                    .child(context_menu.menu.clone()),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
     }
 
     /// Snaps a running scroll-zoom animation to its target while keeping the
@@ -7341,7 +7602,8 @@ impl Render for AgentPanel {
                 }
             })
             .children(self.render_trial_end_upsell(window, cx))
-            .children(self.render_branch_graph_overlay(cx));
+            .children(self.render_branch_graph_overlay(cx))
+            .children(self.render_branch_graph_context_menu());
 
         match self.visible_font_size() {
             WhichFontSize::AgentFont => {

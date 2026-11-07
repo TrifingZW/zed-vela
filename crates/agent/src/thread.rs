@@ -2286,6 +2286,21 @@ impl Thread {
             db_thread.title = title;
             db_thread.updated_at = Utc::now();
             db_thread.messages = messages;
+            // Token bookkeeping and scratch directories belong to the source
+            // thread's whole history, not to this branch.
+            let fork_user_message_ids: HashSet<ClientUserMessageId> = db_thread
+                .messages
+                .iter()
+                .filter_map(|message| match &**message {
+                    Message::User(message) => Some(message.id.clone()),
+                    Message::Agent(_) | Message::Resume | Message::Compaction(_) => None,
+                })
+                .collect();
+            db_thread
+                .request_token_usage
+                .retain(|id, _| fork_user_message_ids.contains(id));
+            db_thread.cumulative_token_usage = Default::default();
+            db_thread.sandboxed_terminal_temp_dir = None;
             // The summary, draft, and scroll position belong to the original
             // branch and would misrepresent the fork.
             db_thread.detailed_summary = None;
@@ -2897,6 +2912,7 @@ impl Thread {
             return Err(anyhow!("Message not found"));
         };
         self.messages.truncate(position);
+        self.context_usage = context_usage_from_history(&self.messages, &self.request_token_usage);
         self.clear_summary();
         cx.notify();
         Ok(())
@@ -2925,6 +2941,7 @@ impl Thread {
             );
         }
         self.messages = messages;
+        self.context_usage = context_usage_from_history(&self.messages, &self.request_token_usage);
         self.clear_summary();
         self.prune_archived_branches();
         cx.notify();
@@ -2946,8 +2963,8 @@ impl Thread {
     /// Splits the live messages into per-node ranges given the nodes of a path
     /// in order, each paired with the client message id that starts its
     /// segment. The root (and empty nodes) have no id of their own and absorb
-    /// whatever precedes the first found boundary. Ids that cannot be found
-    /// merge their segment forward, which is logged.
+    /// whatever precedes the first found boundary. Ids that cannot be found are
+    /// logged and their segment merges into the preceding one.
     fn live_segment_ranges(
         &self,
         old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
@@ -2957,7 +2974,11 @@ impl Thread {
         let mut pending: Option<ConversationNodeId> = None;
         for (node, client_id) in old_segments {
             let Some(client_id) = client_id else {
-                if boundaries.is_empty() {
+                if boundaries.is_empty() && pending.is_none() {
+                    // The first id-less segment is the root, which absorbs
+                    // whatever precedes the first user turn. Later id-less
+                    // segments are empty nodes and must not steal those
+                    // messages.
                     pending = Some(*node);
                 }
                 continue;

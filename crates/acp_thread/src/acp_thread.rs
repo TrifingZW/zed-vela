@@ -4406,7 +4406,13 @@ impl AcpThread {
         }
     }
 
-    fn refresh_conversation_branch_label(&mut self, entry_index: usize, cx: &App) {
+    fn refresh_conversation_branch_label(&mut self, entry_index: usize, cx: &mut Context<Self>) {
+        let Some(node) = self.conversation_tree.node_starting_at(entry_index) else {
+            return;
+        };
+        if self.conversation_tree.start_offset(node) != Some(entry_index) {
+            return;
+        }
         let Some(label) = self
             .entries
             .get(entry_index)
@@ -4415,8 +4421,13 @@ impl AcpThread {
         else {
             return;
         };
-        if let Some(node) = self.conversation_tree.node_starting_at(entry_index) {
-            self.conversation_tree.set_label_if_placeholder(node, label);
+        if self.conversation_tree.set_label_if_placeholder(node, label) {
+            // The branch graph and the persisted tree snapshot only update when
+            // the tree changes, so publish the refined label.
+            cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                transcript_reset: false,
+            });
+            cx.notify();
         }
     }
 
@@ -5863,6 +5874,7 @@ impl AcpThread {
         let entries_len = self.entries.len();
         self.flush_streaming_text(cx);
 
+        let mut updated_entry_index = None;
         if let Some(last_entry) = self.entries.last_mut()
             && let AgentThreadEntry::UserMessage(UserMessage {
                 identity: MessageIdentity::Legacy(existing_protocol_id),
@@ -5889,6 +5901,7 @@ impl AcpThread {
             content.append_prompt(chunk, &language_registry, path_style, cx);
             let idx = entries_len - 1;
             cx.emit(AcpThreadEvent::EntryUpdated(idx));
+            updated_entry_index = Some(idx);
         } else {
             let mut content = MessageContent::default();
             content.append_prompt(chunk, &language_registry, path_style, cx);
@@ -5903,6 +5916,10 @@ impl AcpThread {
                 }),
                 cx,
             );
+        }
+
+        if let Some(index) = updated_entry_index {
+            self.refresh_conversation_branch_label(index, cx);
         }
     }
 

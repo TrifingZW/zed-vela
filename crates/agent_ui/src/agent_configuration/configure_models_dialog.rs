@@ -13,14 +13,23 @@ use collections::HashMap;
 use editor::Editor;
 use gpui::{
     AnyElement, AnyView, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle,
-    Subscription, prelude::*,
+    Subscription, Task, prelude::*,
+};
+use http_client::{
+    CustomHeaders,
+    http::{HeaderName, HeaderValue},
 };
 use language_model::{
     ApiKeyConfiguration, AuthenticateError, CreateProviderSettingsView, IconOrSvg,
     InlineDescription, LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry,
     ModelMode, ProviderSettingsView,
 };
-use language_models::AllLanguageModelSettings;
+use language_models::{
+    AllLanguageModelSettings,
+    provider::api_compatible::{
+        CompatibleProviderFlavor, FetchedModel, fetch_models as fetch_compatible_models,
+    },
+};
 use settings::{
     AnthropicCompatibleAvailableModel, AnthropicCompatibleModelCapabilities,
     AnthropicCompatibleSettingsContent, OpenAiCompatibleAvailableModel,
@@ -167,6 +176,10 @@ struct LlmProviderForm {
     error: Option<SharedString>,
     /// Whether the user is being asked to confirm removing the edited provider.
     confirming_remove: bool,
+    /// Keeps the in-flight model fetch alive and cancels it when the form closes.
+    fetch_models_task: Option<Task<()>>,
+    fetch_models_in_progress: bool,
+    fetch_models_error: Option<SharedString>,
 }
 
 struct HeaderInput {
@@ -193,6 +206,9 @@ impl LlmProviderForm {
             models: vec![ModelInput::new(window, cx)],
             error: None,
             confirming_remove: false,
+            fetch_models_task: None,
+            fetch_models_in_progress: false,
+            fetch_models_error: None,
         }
     }
 
@@ -454,6 +470,74 @@ impl ModelInput {
             supports_prompt_caching: ToggleState::Unselected,
         }
     }
+}
+
+fn custom_headers_from_form(form: &LlmProviderForm, cx: &App) -> CustomHeaders {
+    let headers = form
+        .custom_headers
+        .iter()
+        .filter_map(|header| {
+            let name = header.name.read(cx).text(cx);
+            let value = header.value.read(cx).text(cx);
+            let name = name.trim();
+            let value = value.trim();
+            if name.is_empty() {
+                return None;
+            }
+            // These are managed by the request builders and cannot be overridden,
+            // matching how custom headers are resolved when loading settings.
+            if ["Authorization", "Content-Type", "Accept"]
+                .iter()
+                .any(|reserved| reserved.eq_ignore_ascii_case(name))
+            {
+                return None;
+            }
+            let name = name.parse::<HeaderName>().ok()?;
+            let value = value.parse::<HeaderValue>().ok()?;
+            Some((name, value))
+        })
+        .collect();
+    CustomHeaders::new(headers)
+}
+
+fn apply_fetched_models(
+    form: &mut LlmProviderForm,
+    fetched_models: Vec<FetchedModel>,
+    window: &mut Window,
+    cx: &mut Context<ConfigureModelsDialog>,
+) {
+    if fetched_models.is_empty() {
+        form.fetch_models_error = Some("The provider returned no models.".into());
+        return;
+    }
+
+    // Drop the placeholder rows created for a provider that had no models yet.
+    form.models.retain(|model| {
+        !model.name.read(cx).text(cx).trim().is_empty()
+    });
+    let mut existing_names: HashSet<String> = form
+        .models
+        .iter()
+        .map(|model| model.name.read(cx).text(cx).trim().to_string())
+        .collect();
+
+    for fetched_model in fetched_models {
+        if !existing_names.insert(fetched_model.name.clone()) {
+            continue;
+        }
+        let model = ModelInput::new(window, cx);
+        let name = fetched_model.name;
+        model
+            .name
+            .update(cx, |editor, cx| editor.set_text(name, window, cx));
+        if let Some(display_name) = fetched_model.display_name {
+            model.display_name.update(cx, |editor, cx| {
+                editor.set_text(display_name, window, cx)
+            });
+        }
+        form.models.push(model);
+    }
+    form.fetch_models_error = None;
 }
 
 fn new_input(
@@ -1139,6 +1223,89 @@ impl ConfigureModelsDialog {
             .into_any_element()
     }
 
+    /// Fetches the model list from the endpoint described by the current form
+    /// values, so models can be populated before the provider is saved.
+    fn fetch_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Mode::Form(form) = &mut self.mode else {
+            return;
+        };
+        if form.fetch_models_in_progress {
+            return;
+        }
+
+        let api_url = form.api_url.read(cx).text(cx).trim().to_string();
+        if api_url.is_empty() {
+            form.fetch_models_error = Some("Enter an API URL before fetching models.".into());
+            cx.notify();
+            return;
+        }
+
+        let typed_api_key = form.api_key.read(cx).text(cx).trim().to_string();
+        let api_key = if !typed_api_key.is_empty() {
+            Some(typed_api_key)
+        } else if form.original_api_url.as_deref() == Some(api_url.as_str()) {
+            // Stored keys are scoped to the saved API URL. Once the URL changes,
+            // the form has no key for the new endpoint until the user enters one.
+            form.editing.as_ref().and_then(|provider_id| {
+                LanguageModelRegistry::read_global(cx)
+                    .provider(provider_id)
+                    .and_then(|provider| provider.api_key_for_request(cx))
+            })
+        } else {
+            None
+        };
+        let custom_headers = custom_headers_from_form(form, cx);
+        let flavor = match form.kind {
+            CompatibleProviderKind::OpenAi => CompatibleProviderFlavor::OpenAi,
+            CompatibleProviderKind::Anthropic => CompatibleProviderFlavor::Anthropic,
+        };
+        let client = cx.http_client();
+
+        form.fetch_models_in_progress = true;
+        form.fetch_models_error = None;
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    fetch_compatible_models(
+                        client,
+                        flavor,
+                        &api_url,
+                        api_key.as_deref(),
+                        &custom_headers,
+                    )
+                    .await
+                })
+                .await;
+
+            let update_result = cx.update(|window, cx| {
+                this.update(cx, |this, cx| {
+                    let Mode::Form(form) = &mut this.mode else {
+                        return;
+                    };
+                    form.fetch_models_in_progress = false;
+                    match result {
+                        Ok(models) => apply_fetched_models(form, models, window, cx),
+                        Err(error) => {
+                            form.fetch_models_error =
+                                Some(format!("Failed to fetch models: {error:#}").into());
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+            match update_result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) | Err(error) => {
+                    log::debug!(
+                        "configure models dialog closed before fetching models finished: {error}"
+                    );
+                }
+            }
+        });
+        form.fetch_models_task = Some(task);
+        cx.notify();
+    }
+
     fn save_provider_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let values = {
             let Mode::Form(form) = &self.mode else {
@@ -1716,21 +1883,48 @@ fn render_models_section(
                 .justify_between()
                 .child(Label::new("Models"))
                 .child(
-                    Button::new("add-model", "Add Model")
-                        .start_icon(
-                            Icon::new(IconName::Plus)
-                                .size(IconSize::XSmall)
-                                .color(Color::Muted),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new(
+                                "fetch-models",
+                                if form.fetch_models_in_progress {
+                                    "Fetching…"
+                                } else {
+                                    "Fetch Models"
+                                },
+                            )
+                            .start_icon(
+                                Icon::new(IconName::RotateCcw)
+                                    .size(IconSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                            .label_size(LabelSize::Small)
+                            .disabled(form.fetch_models_in_progress)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.fetch_models(window, cx);
+                            })),
                         )
-                        .label_size(LabelSize::Small)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if let Mode::Form(form) = &mut this.mode {
-                                form.models.push(ModelInput::new(window, cx));
-                            }
-                            cx.notify();
-                        })),
+                        .child(
+                            Button::new("add-model", "Add Model")
+                                .start_icon(
+                                    Icon::new(IconName::Plus)
+                                        .size(IconSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                                .label_size(LabelSize::Small)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if let Mode::Form(form) = &mut this.mode {
+                                        form.models.push(ModelInput::new(window, cx));
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
                 ),
         )
+        .when_some(form.fetch_models_error.clone(), |this, error| {
+            this.child(render_form_error(error))
+        })
         .children(form.models.iter().enumerate().map(|(index, model)| {
             render_model(form.kind, model, index, form.models.len(), window, cx)
         }))

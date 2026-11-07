@@ -590,6 +590,15 @@ pub trait LanguageModelProvider: LanguageModelClient {
     fn api_key_env_var_name(&self, _cx: &App) -> Option<SharedString> {
         None
     }
+
+    /// The API key an auxiliary request, such as listing models, should use.
+    ///
+    /// Returns `None` when no key is available for the provider's current URL.
+    /// Providers that authenticate with something other than an API key keep
+    /// the default.
+    fn api_key_for_request(&self, _cx: &App) -> Option<String> {
+        None
+    }
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>>;
     fn refresh_models(&self, _cx: &mut App) {}
     fn settings_view(&self, cx: &mut App) -> Option<ProviderSettingsView>;

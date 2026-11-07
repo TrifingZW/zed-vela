@@ -286,6 +286,37 @@ impl ConversationTree {
         Ok(id)
     }
 
+    /// Undoes [`Self::begin_user_turn`] for a node that turned out to hold no
+    /// visible content, such as the empty marker a command like `/compact`
+    /// leaves behind. Its entries were already appended to the transcript, so
+    /// they are folded into the parent node instead of being dropped.
+    /// Returns whether the active branch was discarded.
+    pub(crate) fn discard_empty_active_branch(&mut self) -> bool {
+        let id = self.active;
+        if id == self.root {
+            return false;
+        }
+        let Some(node) = self.nodes.get(&id) else {
+            return false;
+        };
+        if node.entry_count > 1 || !node.stored_entries.is_empty() || !node.children.is_empty() {
+            return false;
+        }
+        let Some(parent) = node.parent else {
+            return false;
+        };
+        let discarded_entry_count = node.entry_count;
+        self.nodes.shift_remove(&id);
+        if let Some(parent_node) = self.nodes.get_mut(&parent) {
+            parent_node.children.retain(|child| *child != id);
+            parent_node.entry_count = parent_node
+                .entry_count
+                .saturating_add(discarded_entry_count);
+        }
+        self.active = parent;
+        true
+    }
+
     /// Refines a label that was assigned before the user message content was
     /// known, for example when the agent echoes a keyed message in chunks.
     /// Returns whether the label changed.
@@ -313,11 +344,8 @@ impl ConversationTree {
             if path_id == id {
                 return Some(offset);
             }
-            offset = offset.saturating_add(
-                self.nodes
-                    .get(&path_id)
-                    .map_or(0, |node| node.entry_count),
-            );
+            offset =
+                offset.saturating_add(self.nodes.get(&path_id).map_or(0, |node| node.entry_count));
         }
         None
     }
@@ -503,10 +531,14 @@ impl ConversationTree {
                 }
                 continue;
             }
+            if nodes.contains_key(&id) {
+                log::warn!("dropping duplicate conversation branch id {id:?}");
+                continue;
+            }
             let Some(parent) = node
                 .parent
                 .map(ConversationNodeId::from_u64)
-                .filter(|parent| nodes.contains_key(parent))
+                .filter(|parent| *parent != id && nodes.contains_key(parent))
             else {
                 log::warn!("dropping conversation branch with unknown parent");
                 continue;
@@ -794,6 +826,69 @@ mod tests {
             .expect("returned to first branch");
 
         assert!(tree.node(empty).is_none());
+    }
+
+    #[test]
+    fn empty_active_branches_fold_their_entries_into_the_parent() {
+        let mut tree = ConversationTree::new();
+        let mut entries = Vec::new();
+
+        tree.begin_user_turn("First".into());
+        entries.push(entry("a1"));
+        tree.record_entry_push();
+        let first = tree.active_node();
+
+        entries.push(entry("marker"));
+        assert!(tree.begin_user_turn("Branch".into()));
+        tree.record_entry_push();
+        assert!(tree.discard_empty_active_branch());
+
+        assert_eq!(tree.active_node(), first);
+        assert_eq!(tree.entry_count(first), 2);
+        assert_eq!(tree.node_count(), 2);
+        assert_eq!(
+            entry_ids(&entries),
+            vec!["a1".to_string(), "marker".to_string()],
+            "the empty marker stays in the transcript"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_duplicate_node_ids() {
+        let mut tree = ConversationTree::new();
+        tree.restore(SerializedConversationTree {
+            active: 1,
+            nodes: vec![
+                SerializedConversationNode {
+                    id: 0,
+                    parent: None,
+                    label: "Main".into(),
+                    awaiting_user_message: false,
+                    start_client_id: None,
+                },
+                SerializedConversationNode {
+                    id: 1,
+                    parent: Some(0),
+                    label: "First".into(),
+                    awaiting_user_message: false,
+                    start_client_id: None,
+                },
+                SerializedConversationNode {
+                    id: 1,
+                    parent: Some(1),
+                    label: "Duplicate".into(),
+                    awaiting_user_message: false,
+                    start_client_id: None,
+                },
+            ],
+        });
+
+        assert_eq!(tree.node_count(), 2);
+        assert_eq!(
+            tree.label(ConversationNodeId::from_u64(1))
+                .map(|label| label.to_string()),
+            Some("First".to_string())
+        );
     }
 
     #[test]

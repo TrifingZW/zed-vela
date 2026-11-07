@@ -10,6 +10,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use collections::HashMap;
+use convert_case::{Case, Casing};
 use editor::Editor;
 use gpui::{
     AnyElement, AnyView, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle,
@@ -512,9 +513,8 @@ fn apply_fetched_models(
     }
 
     // Drop the placeholder rows created for a provider that had no models yet.
-    form.models.retain(|model| {
-        !model.name.read(cx).text(cx).trim().is_empty()
-    });
+    form.models
+        .retain(|model| !model.name.read(cx).text(cx).trim().is_empty());
     let mut existing_names: HashSet<String> = form
         .models
         .iter()
@@ -531,9 +531,9 @@ fn apply_fetched_models(
             .name
             .update(cx, |editor, cx| editor.set_text(name, window, cx));
         if let Some(display_name) = fetched_model.display_name {
-            model.display_name.update(cx, |editor, cx| {
-                editor.set_text(display_name, window, cx)
-            });
+            model
+                .display_name
+                .update(cx, |editor, cx| editor.set_text(display_name, window, cx));
         }
         form.models.push(model);
     }
@@ -663,9 +663,9 @@ impl ConfigureModelsDialog {
                 cx.spawn(async move |_this, cx| {
                     match cx.update(|cx| provider.authenticate(cx)).await {
                         Ok(()) | Err(AuthenticateError::CredentialsNotFound) => {}
-                        Err(error) => log::error!(
-                            "Failed to load the API key for {provider_name}: {error}"
-                        ),
+                        Err(error) => {
+                            log::error!("Failed to load the API key for {provider_name}: {error}")
+                        }
                     }
                     anyhow::Ok(())
                 })
@@ -1901,9 +1901,11 @@ fn render_models_section(
                             )
                             .label_size(LabelSize::Small)
                             .disabled(form.fetch_models_in_progress)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.fetch_models(window, cx);
-                            })),
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.fetch_models(window, cx);
+                                },
+                            )),
                         )
                         .child(
                             Button::new("add-model", "Add Model")
@@ -2352,7 +2354,14 @@ fn validate_llm_provider_form(
 
     let api_key = values.api_key.trim().to_string();
     if values.editing.is_none() && api_key.is_empty() {
-        return Err("API Key cannot be empty".into());
+        // A provider can be created without typing its key when the
+        // environment variable that provides it is already set.
+        let env_var_name = format!("{}_API_KEY", provider_name).to_case(Case::UpperSnake);
+        let env_var_is_set =
+            std::env::var(&env_var_name).is_ok_and(|value| !value.trim().is_empty());
+        if !env_var_is_set {
+            return Err("API Key cannot be empty".into());
+        }
     }
     // API keys are stored in the keychain per API URL, so a changed URL cannot
     // reuse the existing key and the user has to provide it again.
@@ -2477,10 +2486,13 @@ fn parse_optional_f32(value: &str, name: &str) -> Result<Option<f32>, SharedStri
     if value.is_empty() {
         return Ok(None);
     }
-    value
+    let parsed = value
         .parse::<f32>()
-        .map(Some)
-        .map_err(|_| format!("{name} must be a number").into())
+        .map_err(|_| format!("{name} must be a number"))?;
+    if !parsed.is_finite() {
+        return Err(format!("{name} must be a finite number").into());
+    }
+    Ok(Some(parsed))
 }
 
 fn parse_optional_u32(value: &str, name: &str) -> Result<Option<u32>, SharedString> {

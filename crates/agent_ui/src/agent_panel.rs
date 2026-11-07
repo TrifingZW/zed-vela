@@ -81,9 +81,9 @@ use gpui::{
     Action, Anchor, Animation, AnimationExt, AnyElement, App, AsyncWindowContext, Bounds,
     ClipboardItem, DismissEvent, DispatchPhase, Entity, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, KeyContext, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    PlatformDisplay, Point as GpuiPoint, ScrollDelta, ScrollEvent, Subscription, Task, TaskExt,
-    WeakEntity, WindowHandle, anchored, canvas, deferred, point, prelude::*, pulsating_between,
-    rems,
+    PlatformDisplay, Point as GpuiPoint, PromptLevel, ScrollDelta, ScrollEvent, Subscription, Task,
+    TaskExt, WeakEntity, WindowHandle, anchored, canvas, deferred, point, prelude::*,
+    pulsating_between, rems,
 };
 use language::LanguageRegistry;
 use language_model::LanguageModelRegistry;
@@ -4501,8 +4501,18 @@ impl AgentPanel {
             return;
         }
         self._branch_graph_observation = thread.map(|thread| {
-            cx.observe(&thread, |this, _, cx| {
-                if this.branch_graph_open {
+            cx.subscribe(&thread, |this, _, event: &AcpThreadEvent, cx| {
+                // The graph only shows branch labels and entry counts, so it
+                // refreshes on structural changes and new entries instead of on
+                // every streaming update.
+                if this.branch_graph_open
+                    && matches!(
+                        event,
+                        AcpThreadEvent::NewEntry
+                            | AcpThreadEvent::EntriesRemoved(_)
+                            | AcpThreadEvent::ConversationTreeChanged { .. }
+                    )
+                {
                     cx.notify();
                 }
             })
@@ -6514,10 +6524,12 @@ impl AgentPanel {
                             })
                             .child(div().flex_1())
                             .child(
-                                Label::new("Right-click a node · Right-drag to pan · Scroll to zoom")
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted)
-                                    .truncate(),
+                                Label::new(
+                                    "Right-click a node · Right-drag to pan · Scroll to zoom",
+                                )
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate(),
                             ),
                     )
                     .child(
@@ -6908,13 +6920,20 @@ impl AgentPanel {
         if !self.branch_graph_open {
             return;
         }
-        let (exists, is_root, can_edit) = {
+        let (exists, is_root, can_edit, label) = {
             let thread = thread.read(cx);
             let tree = thread.conversation_tree();
+            let branches = tree.branches();
+            let label = branches
+                .iter()
+                .find(|branch| branch.id == node)
+                .map(|branch| branch.label.clone())
+                .unwrap_or_default();
             (
-                tree.branches().iter().any(|branch| branch.id == node),
+                branches.iter().any(|branch| branch.id == node),
                 node.as_u64() == 0,
                 thread.can_edit_conversation_tree(),
+                label,
             )
         };
         if !exists {
@@ -6946,9 +6965,10 @@ impl AgentPanel {
             .handler({
                 let panel = panel.clone();
                 let thread = thread.clone();
-                move |_window, cx| {
+                let label = label.clone();
+                move |window, cx| {
                     panel.update(cx, |this, cx| {
-                        this.delete_branch_from_graph(&thread, node, cx);
+                        this.confirm_delete_branch(&thread, node, label.clone(), window, cx);
                     });
                 }
             });
@@ -6972,6 +6992,41 @@ impl AgentPanel {
             _subscription: subscription,
         });
         cx.notify();
+    }
+
+    /// Asks for confirmation before removing a branch and its descendants.
+    fn confirm_delete_branch(
+        &mut self,
+        thread: &Entity<AcpThread>,
+        node: acp_thread::ConversationNodeId,
+        label: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = label.trim();
+        let message = if label.is_empty() {
+            "Delete this conversation branch and all of its descendants?".to_string()
+        } else {
+            format!("Delete the conversation branch \"{label}\" and all of its descendants?")
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &message,
+            Some("This removes the archived messages and cannot be undone."),
+            &["Delete", "Cancel"],
+            cx,
+        );
+        let thread = thread.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await? != 0 {
+                return anyhow::Ok(());
+            }
+            this.update_in(cx, |this, _window, cx| {
+                this.delete_branch_from_graph(&thread, node, cx);
+            })?;
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
     }
 
     /// Removes a branch from the conversation tree along with everything

@@ -62,9 +62,9 @@ Editing an earlier message creates a branch instead of discarding the old turn. 
 Right-click a node to open its context menu:
 
 - **New Thread from This Branch** opens a new thread containing only the messages leading to that node, leaving the original thread untouched.
-- **Delete Branch** removes the node and all of its descendants from the tree. Deleting the active branch falls back to the node's parent; the root node cannot be deleted.
+- **Delete Branch** asks for confirmation, then removes the node and all of its descendants from the tree. Deleting the active branch falls back to the node's parent; the root node cannot be deleted.
 
-While the agent is generating a response, both actions are disabled until it finishes.
+While the agent is generating a response or a branch switch is still being applied, both actions are disabled until it finishes.
 
 ### Editing Messages {#editing-messages}
 

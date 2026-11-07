@@ -1169,6 +1169,9 @@ zed = { codegen-units = 1 }
 [profile.release-fast]
 inherits = "release"
 debug = "full"
+# Zed Vela: keep the symbols that `debug = "full"` emits; the inherited
+# `strip = "symbols"` would throw them away.
+strip = "none"
 lto = false
 codegen-units = 16
 # Zed Vela: the test harness requires unwinding, so perf-test runs cannot inherit

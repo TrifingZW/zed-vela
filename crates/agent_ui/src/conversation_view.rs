@@ -2053,7 +2053,7 @@ impl ConversationView {
                             list_state.splice(0..previous_item_count, 0);
                             view_state.remove(0..previous_entry_count);
                             for index in 0..entry_count {
-                                view_state.sync_entry(index, thread, window, cx);
+                                view_state.sync_entry_initial(index, thread, window, cx);
                             }
                             list_state.splice_focusable(
                                 0..0,

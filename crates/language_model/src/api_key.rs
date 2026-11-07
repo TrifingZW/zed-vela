@@ -276,7 +276,9 @@ impl ApiKeyState {
             return Task::ready(Ok(()));
         }
 
-        let completion = if let Some(load_task) = &self.load_task {
+        let completion = if let Some(load_task) = &self.load_task
+            && self.url == url
+        {
             load_task.completion.clone()
         } else {
             let credentials_key = self.credentials_key(&url);
@@ -284,7 +286,7 @@ impl ApiKeyState {
                 Self::load(url.clone(), credentials_key, get_this.clone(), provider, cx);
             let completion = load_task.completion.clone();
             self.url = url;
-            self.load_status = LoadStatus::NotPresent;
+            self.load_status = LoadStatus::NotLoaded;
             self.load_task = Some(load_task);
             cx.notify();
             completion
@@ -430,5 +432,338 @@ impl Display for ApiKeySource {
             ApiKeySource::EnvVar(var) => write!(f, "environment variable {var}"),
             ApiKeySource::SystemKeychain => write!(f, "system keychain"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use credentials_provider::test_support::FakeCredentialsProvider;
+    use gpui::{AppContext as _, Entity, TestAppContext};
+
+    const URL: &str = "provider";
+    const OTHER_URL: &str = "other-provider";
+    const SCOPE: &str = "First";
+
+    #[gpui::test]
+    async fn test_cached_miss_and_explicit_retry(cx: &mut TestAppContext) {
+        for fail_reads in [false, true] {
+            let test = KeyTest::new(&[], cx);
+            test.provider.state.lock().fail_reads = fail_reads;
+            test.load(URL, cx).await.expect("initial load");
+            {
+                let mut credentials = test.provider.state.lock();
+                credentials.fail_reads = false;
+                credentials
+                    .keys
+                    .insert(URL.to_string(), b"late-key".to_vec());
+            }
+            test.load(URL, cx).await.expect("cached miss");
+            assert_eq!(test.key(URL, cx), None);
+            test.provider.assert_reads(&[URL]);
+            let url = SharedString::from(URL);
+            let retry = test.state.update(cx, |state, cx| {
+                state.load_if_needed(url, |state| state, test.provider.clone(), cx)
+            });
+            retry.await.expect("explicit retry");
+            assert_eq!(test.key(URL, cx).as_deref(), Some("late-key"));
+            test.load(URL, cx).await.expect("cached key");
+            test.provider.assert_reads(&[URL, URL]);
+        }
+    }
+
+    #[gpui::test]
+    async fn test_disabled_gate_and_superseded_loads(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            set_credentials_read_gate::<DisabledAi>(|cx| cx.global::<DisabledAi>().0, cx);
+        });
+        let test = KeyTest::new(&[(OTHER_URL, "latest-key")], cx);
+        set_disabled_ai(true, cx);
+        let superseded = test.load(URL, cx);
+        cx.run_until_parked();
+        drop(test.load(OTHER_URL, cx));
+        cx.run_until_parked();
+        test.provider.assert_reads(&[]);
+        set_disabled_ai(false, cx);
+        set_disabled_ai(true, cx);
+        cx.run_until_parked();
+        test.provider.assert_reads(&[]);
+        let release = test.provider.defer_read(OTHER_URL);
+        set_disabled_ai(false, cx);
+        cx.run_until_parked();
+        drop(test.load(OTHER_URL, cx));
+        set_disabled_ai(true, cx);
+        cx.run_until_parked();
+        test.provider.assert_reads(&[OTHER_URL]);
+        release.send(()).expect("started read remains live");
+        cx.run_until_parked();
+        superseded.await.expect("superseded load completes");
+        assert_eq!(test.key(OTHER_URL, cx).as_deref(), Some("latest-key"));
+        test.provider.assert_reads(&[OTHER_URL]);
+    }
+
+    #[gpui::test]
+    async fn test_store_cancels_stale_read(cx: &mut TestAppContext) {
+        for stored_key in [Some("saved-key"), None] {
+            let test = KeyTest::new(&[(URL, "old-key")], cx);
+            let release = test.provider.defer_read(URL);
+            let load = test.load(URL, cx);
+            cx.run_until_parked();
+            test.store(stored_key, cx).await.expect("mutation");
+            cx.run_until_parked();
+            assert_eq!(release.send(()), Err(()));
+            load.await.expect("cancelled read completes");
+            test.load(URL, cx).await.expect("cached mutation");
+            assert_eq!(test.key(URL, cx).as_deref(), stored_key);
+            test.provider.assert_reads(&[URL]);
+        }
+    }
+
+    #[gpui::test]
+    async fn test_deferred_mutations_follow_url_identity(cx: &mut TestAppContext) {
+        for stored_key in [Some("saved-key"), None] {
+            let test = KeyTest::new(&[(URL, "old-key"), (OTHER_URL, "other-key")], cx);
+            test.load(URL, cx).await.expect("initial load");
+            let release = test.provider.defer_next_mutation();
+            let mutation = test.store(stored_key, cx);
+            cx.run_until_parked();
+            let release_read = test.provider.defer_read(OTHER_URL);
+            let load = test.load(OTHER_URL, cx);
+            cx.run_until_parked();
+            release.send(()).expect("pending mutation");
+            mutation.await.expect("mutation for inactive URL");
+            drop(test.load(OTHER_URL, cx));
+            cx.run_until_parked();
+            assert_eq!(test.key(OTHER_URL, cx), None);
+            release_read.send(()).expect("other URL read remains live");
+            load.await.expect("other URL load");
+            assert_eq!(test.key(OTHER_URL, cx).as_deref(), Some("other-key"));
+            assert_eq!(
+                test.provider.state.lock().keys.get(URL).map(Vec::as_slice),
+                stored_key.map(str::as_bytes)
+            );
+            test.provider.assert_reads(&[URL, OTHER_URL]);
+        }
+    }
+
+    #[gpui::test]
+    async fn scoped_keys_use_length_prefixed_credential_entries(cx: &mut TestAppContext) {
+        let provider = Arc::new(FakeCredentialsProvider::default());
+        let state = new_state(Some(SCOPE), cx);
+        let url = SharedString::from(URL);
+        state
+            .update(cx, |state, cx| {
+                state.store(
+                    url.clone(),
+                    Some("scoped-key".into()),
+                    |state| state,
+                    provider.clone(),
+                    cx,
+                )
+            })
+            .await
+            .expect("store");
+
+        let scoped_key = format!("zed-llm-provider:{}:{SCOPE}:{URL}", SCOPE.len());
+        assert_eq!(
+            provider
+                .state
+                .lock()
+                .keys
+                .get(&scoped_key)
+                .map(Vec::as_slice),
+            Some(b"scoped-key".as_slice())
+        );
+        assert!(
+            provider.state.lock().keys.get(URL).is_none(),
+            "scoped keys must not be written under the bare URL"
+        );
+
+        let reloaded = new_state(Some(SCOPE), cx);
+        reloaded
+            .update(cx, |state, cx| {
+                state.load_if_needed(url, |state| state, provider.clone(), cx)
+            })
+            .await
+            .expect("load");
+        assert_eq!(
+            reloaded.read_with(cx, |state, _| state.key(URL)).as_deref(),
+            Some("scoped-key")
+        );
+    }
+
+    #[gpui::test]
+    async fn distinct_scopes_keep_distinct_keys(cx: &mut TestAppContext) {
+        let provider = Arc::new(FakeCredentialsProvider::default());
+        let first = new_state(Some(SCOPE), cx);
+        let second = new_state(Some("Second"), cx);
+        let url = SharedString::from(URL);
+        for (state, key) in [(&first, "first-key"), (&second, "second-key")] {
+            state
+                .update(cx, |state, cx| {
+                    state.store(
+                        url.clone(),
+                        Some(key.into()),
+                        |state| state,
+                        provider.clone(),
+                        cx,
+                    )
+                })
+                .await
+                .expect("store");
+        }
+
+        let reloaded_first = new_state(Some(SCOPE), cx);
+        reloaded_first
+            .update(cx, |state, cx| {
+                state.load_if_needed(url.clone(), |state| state, provider.clone(), cx)
+            })
+            .await
+            .expect("load first");
+        assert_eq!(
+            reloaded_first
+                .read_with(cx, |state, _| state.key(URL))
+                .as_deref(),
+            Some("first-key")
+        );
+
+        let reloaded_second = new_state(Some("Second"), cx);
+        reloaded_second
+            .update(cx, |state, cx| {
+                state.load_if_needed(url, |state| state, provider.clone(), cx)
+            })
+            .await
+            .expect("load second");
+        assert_eq!(
+            reloaded_second
+                .read_with(cx, |state, _| state.key(URL))
+                .as_deref(),
+            Some("second-key")
+        );
+    }
+
+    #[gpui::test]
+    async fn legacy_url_keys_migrate_to_the_scoped_entry(cx: &mut TestAppContext) {
+        let provider = Arc::new(FakeCredentialsProvider::default());
+        provider
+            .state
+            .lock()
+            .keys
+            .insert(URL.to_string(), b"legacy-key".to_vec());
+        let state = new_state(Some(SCOPE), cx);
+        let url = SharedString::from(URL);
+        state
+            .update(cx, |state, cx| {
+                state.load_if_needed(url, |state| state, provider.clone(), cx)
+            })
+            .await
+            .expect("load");
+
+        assert_eq!(
+            state.read_with(cx, |state, _| state.key(URL)).as_deref(),
+            Some("legacy-key")
+        );
+        let scoped_key = format!("zed-llm-provider:{}:{SCOPE}:{URL}", SCOPE.len());
+        assert_eq!(
+            provider
+                .state
+                .lock()
+                .keys
+                .get(&scoped_key)
+                .map(Vec::as_slice),
+            Some(b"legacy-key".as_slice())
+        );
+        provider.assert_reads(&[scoped_key.as_str(), URL]);
+    }
+
+    #[gpui::test]
+    async fn deleting_a_scoped_key_also_removes_the_legacy_entry(cx: &mut TestAppContext) {
+        let provider = Arc::new(FakeCredentialsProvider::default());
+        let scoped_key = format!("zed-llm-provider:{}:{SCOPE}:{URL}", SCOPE.len());
+        {
+            let mut credentials = provider.state.lock();
+            credentials
+                .keys
+                .insert(URL.to_string(), b"legacy-key".to_vec());
+            credentials
+                .keys
+                .insert(scoped_key.clone(), b"legacy-key".to_vec());
+        }
+        let state = new_state(Some(SCOPE), cx);
+        let url = SharedString::from(URL);
+        state
+            .update(cx, |state, cx| {
+                state.store(url, None, |state| state, provider.clone(), cx)
+            })
+            .await
+            .expect("delete");
+
+        let credentials = provider.state.lock();
+        assert!(credentials.keys.get(&scoped_key).is_none());
+        assert!(
+            credentials.keys.get(URL).is_none(),
+            "the legacy entry would be migrated back on the next load"
+        );
+    }
+
+    type LoadTask = Task<Result<(), AuthenticateError>>;
+
+    struct DisabledAi(bool);
+
+    impl Global for DisabledAi {}
+
+    struct KeyTest {
+        state: Entity<ApiKeyState>,
+        provider: Arc<FakeCredentialsProvider>,
+    }
+
+    impl KeyTest {
+        fn new(keys: &[(&str, &str)], cx: &mut TestAppContext) -> Self {
+            let provider = Arc::new(FakeCredentialsProvider::default());
+            provider.state.lock().keys.extend(
+                keys.iter()
+                    .map(|(url, key)| (url.to_string(), key.as_bytes().to_vec())),
+            );
+            Self {
+                state: new_state(None, cx),
+                provider,
+            }
+        }
+
+        fn load(&self, url: &'static str, cx: &mut TestAppContext) -> LoadTask {
+            let url = SharedString::from(url);
+            self.state.update(cx, |state, cx| {
+                state.load_cached(url, |state| state, self.provider.clone(), cx)
+            })
+        }
+
+        fn store(&self, key: Option<&str>, cx: &mut TestAppContext) -> Task<Result<()>> {
+            let url = SharedString::from(URL);
+            let key = key.map(String::from);
+            self.state.update(cx, |state, cx| {
+                state.store(url, key, |state| state, self.provider.clone(), cx)
+            })
+        }
+
+        fn key(&self, url: &str, cx: &TestAppContext) -> Option<Arc<str>> {
+            self.state.read_with(cx, |state, _| state.key(url))
+        }
+    }
+
+    fn new_state(scope: Option<&'static str>, cx: &mut TestAppContext) -> Entity<ApiKeyState> {
+        cx.new(|_| {
+            ApiKeyState::new_with_scope(
+                SharedString::default(),
+                scope.map(SharedString::new_static),
+                EnvVar {
+                    name: SharedString::new_static("TEST_API_KEY"),
+                    value: None,
+                },
+            )
+        })
+    }
+
+    fn set_disabled_ai(disabled: bool, cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(DisabledAi(disabled)));
     }
 }

@@ -13,8 +13,24 @@ rustflags = ["-C", "target-feature=+crt-static"]
 # environment variable set above, and must live in a target section because
 # `[build] rustflags` is ignored on Windows whenever a matching target rustflags
 # entry exists.
+#
+# Cargo replaces (does not merge) rustflags for a target when `--config` is used,
+# so the base Windows flags from `.cargo/config.toml` are repeated here. Omitting
+# them silently drops `crt-static` (livekit fails to link) and `target-cpu=native`.
+# `target-cpu=native` assumes the build host is the machine that runs the binary.
 [target.'cfg(target_os = "windows")']
-rustflags = ["-Z", "location-detail=none", "-Z", "fmt-debug=none"]
+rustflags = [
+    "--cfg",
+    "windows_slim_errors",
+    "-C",
+    "target-feature=+crt-static",
+    "-C",
+    "target-cpu=native",
+    "-Z",
+    "location-detail=none",
+    "-Z",
+    "fmt-debug=none",
+]
 
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "link-arg=-fuse-ld=lld"]

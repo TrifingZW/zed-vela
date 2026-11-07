@@ -3678,6 +3678,10 @@ pub struct AcpThread {
     /// prompts, skill envelopes) that were rendered as indented entries live,
     /// so replaying them as ordinary prompts would fabricate nodes.
     restoring_conversation_segment: bool,
+    /// Whether the agent session is still being synchronized with a branch
+    /// switch. Prompts are rejected until it finishes so they cannot be
+    /// appended to the branch that is being replaced.
+    conversation_tree_switching: bool,
     entries: Vec<AgentThreadEntry>,
     // Notices stay with the live session, but never enter conversation history or exports.
     notices: Vec<(usize, acp_v2::Notice)>,
@@ -4059,6 +4063,7 @@ impl AcpThread {
             provisional_title: None,
             conversation_tree: ConversationTree::new(),
             restoring_conversation_segment: false,
+            conversation_tree_switching: false,
             project,
             running_turn: None,
             turn_id: 0,
@@ -4254,24 +4259,60 @@ impl AcpThread {
         let new_path = self.conversation_tree.path_to(node);
         let old_segments = self.live_path_segments(&old_path);
 
-        if let Some(session_truncate) = self.connection.truncate(self.session_id(), cx) {
-            // The session helper re-enters this thread through `cancel`, so it
-            // must run only after this update has released the entity lease.
-            cx.spawn(async move |_this, cx| {
-                cx.update(|cx| session_truncate.switch_branch(&old_segments, &new_path, cx))
-                    .await
-                    .log_err();
-            })
-            .detach();
-        }
-
         self.conversation_tree
             .materialize(node, &mut self.entries)?;
+        self.had_error = false;
+        self.local_execution_error = None;
+        if let Some(session_truncate) = self.connection.truncate(self.session_id(), cx) {
+            self.spawn_branch_sync(session_truncate, old_segments, new_path, cx);
+        }
         cx.emit(AcpThreadEvent::ConversationTreeChanged {
             transcript_reset: true,
         });
         cx.notify();
         Ok(())
+    }
+
+    /// Synchronizes the agent's linear session with a branch switch. The
+    /// session helper re-enters this thread through `cancel`, so the task must
+    /// run only after the caller has released the entity lease. Prompts are
+    /// rejected while it is in flight so a message cannot be appended to the
+    /// branch being replaced.
+    fn spawn_branch_sync(
+        &mut self,
+        session_truncate: Rc<dyn AgentSessionTruncate>,
+        old_segments: Vec<(ConversationNodeId, Option<ClientUserMessageId>)>,
+        new_path: Vec<ConversationNodeId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.conversation_tree_switching = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .update(|cx| session_truncate.switch_branch(&old_segments, &new_path, cx))
+                .await;
+            let Some(thread) = this.upgrade() else {
+                return;
+            };
+            thread.update(cx, |thread, cx| {
+                thread.conversation_tree_switching = false;
+                if let Err(error) = result {
+                    log::error!(
+                        "failed to apply the selected conversation branch to the agent session: {error:#}"
+                    );
+                    thread.push_notice(
+                        acp_v2::Notice::new(
+                            acp_v2::NoticeSeverity::Error,
+                            "Conversation branch was not applied to the agent session",
+                        )
+                        .description(format!("{error:#}")),
+                        cx,
+                    );
+                }
+                cx.emit(AcpThreadEvent::StatusChanged);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Whether the conversation tree can be edited right now: only idle root
@@ -4303,20 +4344,15 @@ impl AcpThread {
             .conversation_tree
             .remove_branch(node, &mut self.entries)?;
 
-        if active_removed
-            && let Some(session_truncate) = self.connection.truncate(self.session_id(), cx)
-        {
-            let new_path = self
-                .conversation_tree
-                .path_to(self.conversation_tree.active_node());
-            // The session helper re-enters this thread through `cancel`, so it
-            // must run only after this update has released the entity lease.
-            cx.spawn(async move |_this, cx| {
-                cx.update(|cx| session_truncate.switch_branch(&old_segments, &new_path, cx))
-                    .await
-                    .log_err();
-            })
-            .detach();
+        if active_removed {
+            self.had_error = false;
+            self.local_execution_error = None;
+            if let Some(session_truncate) = self.connection.truncate(self.session_id(), cx) {
+                let new_path = self
+                    .conversation_tree
+                    .path_to(self.conversation_tree.active_node());
+                self.spawn_branch_sync(session_truncate, old_segments, new_path, cx);
+            }
         }
 
         cx.emit(AcpThreadEvent::ConversationTreeChanged {
@@ -4446,6 +4482,9 @@ impl AcpThread {
         }
         if self.is_compacting() {
             bail!("Wait for context compaction to finish before switching branches");
+        }
+        if self.conversation_tree_switching {
+            bail!("Wait for the branch switch to finish");
         }
         match self.status() {
             ThreadStatus::Idle => Ok(()),
@@ -5466,7 +5505,8 @@ impl AcpThread {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let previous_entry_count = self.entries.len();
-        let location = self.keyed_message_location(MessageKind::Session, update.message_id, cx)?;
+        let (location, created_branch) =
+            self.keyed_message_location(MessageKind::Session, update.message_id, cx)?;
         let Some(AgentThreadEntry::SessionMessage(message)) =
             self.entries.get_mut(location.entry_index())
         else {
@@ -5491,6 +5531,7 @@ impl AcpThread {
             update.content,
             metadata(update.meta),
             previous_entry_count,
+            created_branch,
             cx,
         )
     }
@@ -5579,12 +5620,14 @@ impl AcpThread {
     ) -> Result<()> {
         // A chunk carries only content: its metadata does not patch the message's.
         let previous_entry_count = self.entries.len();
-        let location = self.keyed_message_location(MessageKind::Session, chunk.message_id, cx)?;
+        let (location, created_branch) =
+            self.keyed_message_location(MessageKind::Session, chunk.message_id, cx)?;
         self.append_message_content(
             location,
             MessageKind::Session,
             chunk.content,
             previous_entry_count,
+            created_branch,
             cx,
         )
     }
@@ -5598,8 +5641,16 @@ impl AcpThread {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let previous_entry_count = self.entries.len();
-        let location = self.keyed_message_location(kind, id, cx)?;
-        self.replace_message_content(location, kind, content, meta, previous_entry_count, cx)
+        let (location, created_branch) = self.keyed_message_location(kind, id, cx)?;
+        self.replace_message_content(
+            location,
+            kind,
+            content,
+            meta,
+            previous_entry_count,
+            created_branch,
+            cx,
+        )
     }
 
     fn replace_message_content(
@@ -5609,6 +5660,7 @@ impl AcpThread {
         content: MaybeUndefined<Vec<acp_v2::ContentBlock>>,
         meta: MetadataUpdate,
         previous_entry_count: usize,
+        created_branch: bool,
         cx: &mut Context<Self>,
     ) -> Result<()> {
         if !content.is_undefined()
@@ -5632,6 +5684,10 @@ impl AcpThread {
             MaybeUndefined::Null => Some(Vec::new()),
             MaybeUndefined::Value(content) => Some(content),
         };
+        // Only an explicit empty replacement means the entry has no visible
+        // content; an undefined update leaves it as it was.
+        let replaced_with_empty_content =
+            matches!(&replacement, Some(content) if content.is_empty());
         if let Some(replacement) = replacement {
             if kind == MessageKind::User {
                 message_content.replace_prompt(replacement, &language_registry, path_style, cx);
@@ -5643,6 +5699,15 @@ impl AcpThread {
         self.emit_message_update(location, previous_entry_count, cx);
         if kind == MessageKind::User {
             self.refresh_conversation_branch_label(location.entry_index(), cx);
+        }
+        let folded_empty_branch = created_branch
+            && kind == MessageKind::User
+            && replaced_with_empty_content
+            && self.conversation_tree.discard_empty_active_branch();
+        if created_branch && !folded_empty_branch {
+            cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                transcript_reset: false,
+            });
         }
         Ok(())
     }
@@ -5660,8 +5725,15 @@ impl AcpThread {
             ..
         } = chunk;
         let previous_entry_count = self.entries.len();
-        let location = self.keyed_message_location(kind, message_id, cx)?;
-        self.append_message_content(location, kind, content, previous_entry_count, cx)
+        let (location, created_branch) = self.keyed_message_location(kind, message_id, cx)?;
+        self.append_message_content(
+            location,
+            kind,
+            content,
+            previous_entry_count,
+            created_branch,
+            cx,
+        )
     }
 
     fn append_message_content(
@@ -5670,6 +5742,7 @@ impl AcpThread {
         kind: MessageKind,
         content: acp_v2::ContentBlock,
         previous_entry_count: usize,
+        created_branch: bool,
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let content = match content {
@@ -5724,15 +5797,24 @@ impl AcpThread {
         if kind == MessageKind::User {
             self.refresh_conversation_branch_label(location.entry_index(), cx);
         }
+        if created_branch {
+            cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                transcript_reset: false,
+            });
+        }
         Ok(())
     }
 
+    /// Returns the location of a keyed message, creating a transcript entry if
+    /// needed, together with whether that entry started a new conversation
+    /// branch. Callers publish the tree change only after the entry's content
+    /// and client id are populated.
     fn keyed_message_location(
         &mut self,
         kind: MessageKind,
         id: acp_v2::MessageId,
         cx: &mut Context<Self>,
-    ) -> Result<MessageLocation> {
+    ) -> Result<(MessageLocation, bool)> {
         // Scan the authoritative records so rewind and refusal need no secondary
         // index maintenance. Most chunks target the last record.
         let identity = MessageIdentity::Keyed(id);
@@ -5761,7 +5843,7 @@ impl AcpThread {
                 _ => None,
             };
             if let Some(location) = found {
-                return Ok(location);
+                return Ok((location, false));
             }
         }
 
@@ -5774,11 +5856,27 @@ impl AcpThread {
                 // were injected context (MCP prompts, skill envelopes) that
                 // were rendered as indented entries live, so replaying them as
                 // ordinary prompts would fabricate nodes and corrupt the tree.
-                let injected_continuation = self.restoring_conversation_segment
-                    && !self
+                //
+                // Threads saved without a tree (including threads last saved
+                // by upstream Zed) have no segment boundaries at all, so there
+                // the same continuation rule follows the transcript: a non-empty
+                // user message directly after another one is injected context
+                // (or a merged local prompt), exactly like the live transcript.
+                // Empty user entries are command markers (such as `/compact`)
+                // whose branch was already folded away, so they do not make the
+                // next real prompt a continuation.
+                let injected_continuation = if self.restoring_conversation_segment {
+                    !self
                         .conversation_tree
                         .node(self.conversation_tree.active_node())
-                        .is_some_and(|node| node.is_awaiting_user_message());
+                        .is_some_and(|node| node.is_awaiting_user_message())
+                } else {
+                    matches!(
+                        self.entries.last(),
+                        Some(AgentThreadEntry::UserMessage(message))
+                            if !message.content.source_blocks().is_empty()
+                    )
+                };
                 let created_branch = if injected_continuation {
                     false
                 } else {
@@ -5792,15 +5890,10 @@ impl AcpThread {
                         client_id: None,
                         is_optimistic: false,
                         content: MessageContent::default(),
-                        indented: false,
+                        indented: injected_continuation,
                     }));
                 self.conversation_tree.record_entry_push();
-                if created_branch {
-                    cx.emit(AcpThreadEvent::ConversationTreeChanged {
-                        transcript_reset: false,
-                    });
-                }
-                Ok(MessageLocation::User { entry_index })
+                Ok((MessageLocation::User { entry_index }, created_branch))
             }
             MessageKind::Session => {
                 self.entries
@@ -5813,7 +5906,8 @@ impl AcpThread {
                         meta: None,
                         content: MessageContent::default(),
                     }));
-                Ok(MessageLocation::Session { entry_index })
+                self.conversation_tree.record_entry_push();
+                Ok((MessageLocation::Session { entry_index }, false))
             }
             MessageKind::Assistant | MessageKind::Thought => {
                 let chunk = if kind == MessageKind::Thought {
@@ -5835,10 +5929,13 @@ impl AcpThread {
                 {
                     let chunk_index = message.chunks.len();
                     message.chunks.push(chunk);
-                    Ok(MessageLocation::Assistant {
-                        entry_index: entry_index - 1,
-                        chunk_index,
-                    })
+                    Ok((
+                        MessageLocation::Assistant {
+                            entry_index: entry_index - 1,
+                            chunk_index,
+                        },
+                        false,
+                    ))
                 } else {
                     self.entries
                         .push(AgentThreadEntry::AssistantMessage(AssistantMessage {
@@ -5847,10 +5944,13 @@ impl AcpThread {
                             is_subagent_output: false,
                         }));
                     self.conversation_tree.record_entry_push();
-                    Ok(MessageLocation::Assistant {
-                        entry_index,
-                        chunk_index: 0,
-                    })
+                    Ok((
+                        MessageLocation::Assistant {
+                            entry_index,
+                            chunk_index: 0,
+                        },
+                        false,
+                    ))
                 }
             }
         }
@@ -6269,12 +6369,14 @@ impl AcpThread {
         self.truncate_entries_with_mode(index, ConversationTruncation::Discard, cx);
     }
 
+    /// Truncates the transcript and reports whether the removed suffix was
+    /// archived as a conversation branch instead of being dropped.
     fn truncate_entries_with_mode(
         &mut self,
         index: usize,
         mode: ConversationTruncation,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.flush_streaming_text(cx);
         let removed_requests = self
             .entries
@@ -6286,10 +6388,10 @@ impl AcpThread {
             })
             .collect::<Vec<_>>();
 
-        if !self
-            .conversation_tree
-            .truncate_active_path(index, &mut self.entries, mode)
-        {
+        let truncation_handled =
+            self.conversation_tree
+                .truncate_active_path(index, &mut self.entries, mode);
+        if !truncation_handled {
             self.entries.truncate(index);
             self.conversation_tree.truncate_active_counts(index);
         }
@@ -6302,6 +6404,7 @@ impl AcpThread {
         cx.emit(AcpThreadEvent::ConversationTreeChanged {
             transcript_reset: false,
         });
+        truncation_handled && mode == ConversationTruncation::Preserve
     }
 
     pub fn push_context_compaction(
@@ -7587,6 +7690,9 @@ impl AcpThread {
         cx: &mut Context<Self>,
     ) -> Submission {
         let id = self.register_submission(message.clone().into(), cx);
+        if self.conversation_tree_switching {
+            return self.reject_switching_submission(id, cx);
+        }
         match self.submissions.transport().clone() {
             SubmissionTransport::Receipt(submissions) => {
                 let request = submissions.submit(message, cx);
@@ -7606,6 +7712,16 @@ impl AcpThread {
             Err(anyhow!(
                 "The agent owns this session, so it does not accept prompts"
             ))
+        })
+    }
+
+    fn reject_switching_submission(
+        &mut self,
+        id: SubmissionId,
+        cx: &mut Context<Self>,
+    ) -> Submission {
+        self.track_submission(id, None, cx, async move |_, _| {
+            Err(anyhow!("Wait for the conversation branch switch to finish"))
         })
     }
 
@@ -7638,21 +7754,32 @@ impl AcpThread {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         let previous_entry_count = self.entries.len();
-        let location = self.keyed_message_location(MessageKind::User, id.message_id(), cx)?;
+        let (location, created_branch) =
+            self.keyed_message_location(MessageKind::User, id.message_id(), cx)?;
         let language_registry = self.project.read(cx).languages().clone();
         let path_style = self.project.read(cx).path_style(cx);
-        let Some(AgentThreadEntry::UserMessage(message)) =
-            self.entries.get_mut(location.entry_index())
-        else {
-            return Err(anyhow!("user message disappeared during preparation"));
+        let content_is_empty = {
+            let Some(AgentThreadEntry::UserMessage(message)) =
+                self.entries.get_mut(location.entry_index())
+            else {
+                return Err(anyhow!("user message disappeared during preparation"));
+            };
+            message.client_id = Some(id);
+            message.is_optimistic = false;
+            message
+                .content
+                .replace_prompt(content, &language_registry, path_style, cx);
+            message.content.source_blocks().is_empty()
         };
-        message.client_id = Some(id);
-        message.is_optimistic = false;
-        message
-            .content
-            .replace_prompt(content, &language_registry, path_style, cx);
         self.emit_message_update(location, previous_entry_count, cx);
         self.refresh_conversation_branch_label(location.entry_index(), cx);
+        if created_branch
+            && !(content_is_empty && self.conversation_tree.discard_empty_active_branch())
+        {
+            cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                transcript_reset: false,
+            });
+        }
         cx.notify();
         Ok(())
     }
@@ -7741,6 +7868,9 @@ impl AcpThread {
             .map(|submission| submission.content.clone())
             .unwrap_or_default();
         let id = self.register_submission(content.clone(), cx);
+        if self.conversation_tree_switching {
+            return self.reject_switching_submission(id, cx);
+        }
         if let Err(error) = self.validate_prompt_content(&content) {
             return self.track_submission(id, None, cx, async move |_, _| Err(error));
         }
@@ -8233,15 +8363,19 @@ impl AcpThread {
                         .collect();
 
                     let range = ix..this.entries.len();
-                    this.truncate_entries_with_mode(ix, mode, cx);
+                    let branch_preserved = this.truncate_entries_with_mode(ix, mode, cx);
                     cx.emit(AcpThreadEvent::EntriesRemoved(range));
 
-                    // Kill and remove the terminals
-                    for terminal_id in terminals_to_remove {
-                        if let Some(terminal) = this.terminals.remove(&terminal_id) {
-                            terminal.update(cx, |terminal, cx| {
-                                terminal.kill(cx);
-                            });
+                    // Kill and remove the terminals unless the rollback archived
+                    // them as a conversation branch; switching back must keep
+                    // those terminals alive.
+                    if !branch_preserved {
+                        for terminal_id in terminals_to_remove {
+                            if let Some(terminal) = this.terminals.remove(&terminal_id) {
+                                terminal.update(cx, |terminal, cx| {
+                                    terminal.kill(cx);
+                                });
+                            }
                         }
                     }
                 }
@@ -12807,6 +12941,70 @@ mod tests {
                     .expect("local receipt")
                     .state,
                 SubmissionState::Accepted { echoed: true, .. }
+            ));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_empty_local_prompt_does_not_create_a_branch(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (thread, _) = new_receipt_test_thread(cx).await;
+
+        thread
+            .update(cx, |thread, cx| {
+                thread.upsert_local_user_message(ClientUserMessageId::new(), Vec::new(), cx)
+            })
+            .expect("empty command marker");
+        thread.read_with(cx, |thread, _| {
+            assert_eq!(thread.entries().len(), 1);
+            assert_eq!(thread.conversation_tree().node_count(), 1);
+        });
+
+        thread
+            .update(cx, |thread, cx| {
+                thread.upsert_local_user_message(
+                    ClientUserMessageId::new(),
+                    vec!["prompt".into()],
+                    cx,
+                )
+            })
+            .expect("local prompt");
+        thread.read_with(cx, |thread, _| {
+            assert_eq!(thread.entries().len(), 2);
+            assert_eq!(thread.conversation_tree().node_count(), 2);
+            assert!(matches!(
+                thread.entries().last(),
+                Some(AgentThreadEntry::UserMessage(message)) if !message.indented
+            ));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_consecutive_local_prompts_stay_on_one_branch(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (thread, _) = new_receipt_test_thread(cx).await;
+
+        for prompt in ["first", "injected"] {
+            thread
+                .update(cx, |thread, cx| {
+                    thread.upsert_local_user_message(
+                        ClientUserMessageId::new(),
+                        vec![prompt.into()],
+                        cx,
+                    )
+                })
+                .expect("local prompt");
+        }
+
+        thread.read_with(cx, |thread, _| {
+            assert_eq!(thread.conversation_tree().node_count(), 2);
+            let entries = thread.entries();
+            assert!(matches!(
+                entries,
+                [
+                    AgentThreadEntry::UserMessage(first),
+                    AgentThreadEntry::UserMessage(second),
+                ] if !first.indented && second.indented
             ));
         });
     }

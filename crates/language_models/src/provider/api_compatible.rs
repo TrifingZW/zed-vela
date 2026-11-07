@@ -47,20 +47,42 @@ pub async fn fetch_models(
     custom_headers: &CustomHeaders,
 ) -> Result<Vec<FetchedModel>> {
     let (uri, api_key_header) = match flavor {
-        CompatibleProviderFlavor::OpenAi => {
-            (format!("{}/models", api_url.trim_end_matches('/')), "Authorization")
-        }
+        CompatibleProviderFlavor::OpenAi => (
+            format!("{}/models", api_url.trim_end_matches('/')),
+            "Authorization",
+        ),
         CompatibleProviderFlavor::Anthropic => (
             format!("{}/v1/models?limit=1000", api_url.trim_end_matches('/')),
             "X-Api-Key",
         ),
     };
 
-    let mut request = HttpRequest::builder()
-        .method(Method::GET)
-        .uri(uri.clone())
+    let request = HttpRequest::builder().method(Method::GET).uri(uri.clone());
+
+    // Custom headers are appended to the request, so a custom `Authorization`
+    // would sit next to the managed one. Drop the headers this request owns and
+    // let the flavor-specific values below provide them.
+    let reserved_header_names: &[&str] = match flavor {
+        CompatibleProviderFlavor::OpenAi => &["authorization", "content-type", "accept"],
+        CompatibleProviderFlavor::Anthropic => &[
+            "authorization",
+            "content-type",
+            "accept",
+            "x-api-key",
+            "anthropic-version",
+            "anthropic-beta",
+        ],
+    };
+    let custom_headers = CustomHeaders::new(
+        custom_headers
+            .iter()
+            .filter(|(name, _)| !reserved_header_names.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+    );
+    let mut request = request
         .header("Accept", "application/json")
-        .extra_headers(custom_headers);
+        .extra_headers(&custom_headers);
     if flavor == CompatibleProviderFlavor::Anthropic {
         request = request.header("Anthropic-Version", "2023-06-01");
     }
@@ -473,8 +495,7 @@ mod tests {
 
     #[test]
     fn parses_bare_model_arrays_and_name_fields() {
-        let models = parse_models(r#"[{"name":"local-model"}]"#)
-            .expect("parse bare model array");
+        let models = parse_models(r#"[{"name":"local-model"}]"#).expect("parse bare model array");
         assert_eq!(
             models,
             vec![FetchedModel {

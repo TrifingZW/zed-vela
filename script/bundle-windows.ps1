@@ -329,7 +329,7 @@ function BuildInstaller {
     $issFilePath = "$innoDir\zed.iss"
     switch ($channel) {
         "stable" {
-            $appId = "{{2DB0DA96-CA55-49BB-AF4F-64AF36A86712}"
+            $appId = "{{8368FAD6-19D1-438D-8222-53B974566740}"
             $appIconName = "app-icon"
             $appName = "Zed Vela"
             $appDisplayName = "Zed Vela"
@@ -340,10 +340,10 @@ function BuildInstaller {
             $regValueName = "ZedVela"
             $appUserId = "dev.zed-vela.Zed-Vela"
             $appShellNameShort = "Zed &Vela"
-            $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
+            $appAppxFullName = "ZedIndustries.ZedVela_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "preview" {
-            $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"
+            $appId = "{{4A71D35B-D43D-44FF-BD1D-449FEDF10298}"
             $appIconName = "app-icon-preview"
             $appName = "Zed Vela Preview"
             $appDisplayName = "Zed Vela Preview"
@@ -354,10 +354,10 @@ function BuildInstaller {
             $regValueName = "ZedVelaPreview"
             $appUserId = "dev.zed-vela.Zed-Vela-Preview"
             $appShellNameShort = "Zed &Vela Preview"
-            $appAppxFullName = "ZedIndustries.Zed.Preview_1.0.0.0_neutral__japxn1gcva8rg"
+            $appAppxFullName = "ZedIndustries.ZedVela.Preview_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "nightly" {
-            $appId = "{{1BDB21D3-14E7-433C-843C-9C97382B2FE0}"
+            $appId = "{{9D605E7C-DAF7-41A3-AE9A-B1ABFC7CC698}"
             $appIconName = "app-icon-nightly"
             $appName = "Zed Vela Nightly"
             $appDisplayName = "Zed Vela Nightly"
@@ -368,10 +368,10 @@ function BuildInstaller {
             $regValueName = "ZedVelaNightly"
             $appUserId = "dev.zed-vela.Zed-Vela-Nightly"
             $appShellNameShort = "Zed &Vela Nightly"
-            $appAppxFullName = "ZedIndustries.Zed.Nightly_1.0.0.0_neutral__japxn1gcva8rg"
+            $appAppxFullName = "ZedIndustries.ZedVela.Nightly_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "dev" {
-            $appId = "{{8357632E-24A4-4F32-BA97-E575B4D1FE5D}"
+            $appId = "{{7B1000A4-C923-4DF1-A215-0FD3BEBB33AC}"
             $appIconName = "app-icon-dev"
             $appName = "Zed Vela"
             $appDisplayName = "Zed Vela"
@@ -382,7 +382,7 @@ function BuildInstaller {
             $regValueName = "ZedVelaDev"
             $appUserId = "dev.zed-vela.Zed-Vela-Dev"
             $appShellNameShort = "Zed &Vela"
-            $appAppxFullName = "ZedIndustries.Zed.Dev_1.0.0.0_neutral__japxn1gcva8rg"
+            $appAppxFullName = "ZedIndustries.ZedVela.Dev_1.0.0.0_neutral__japxn1gcva8rg"
         }
         default {
             Write-Error "can't bundle installer for $channel."

@@ -197,7 +197,7 @@ impl RenderOnce for ChoiceCard {
             .items_start()
             .gap_1p5()
             .rounded_sm()
-            .border_1()
+            .border_2()
             .border_color(border_color.opacity(0.5))
             .bg(background)
             .px_2()

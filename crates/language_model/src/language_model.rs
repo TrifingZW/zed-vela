@@ -579,6 +579,16 @@ pub trait LanguageModelProvider: LanguageModelClient {
     }
 
     fn is_authenticated(&self, cx: &App) -> bool;
+
+    /// The environment variable currently supplying this provider's API key,
+    /// when the key comes from the environment instead of the system keychain.
+    ///
+    /// Providers that expose [`ProviderSettingsView::ApiKey`] already report
+    /// this in their [`ApiKeyConfiguration`]. This lets UIs which render their
+    /// own configuration form detect the same state.
+    fn api_key_env_var_name(&self, _cx: &App) -> Option<SharedString> {
+        None
+    }
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>>;
     fn refresh_models(&self, _cx: &mut App) {}
     fn settings_view(&self, cx: &mut App) -> Option<ProviderSettingsView>;

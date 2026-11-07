@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> Remove this line to confirm you've reviewed this PR before submitting.
+
 # Zed Vela
 
 Zed Vela 是 Zed 编辑器的一个分支，具有树图上下文管理，独立的 LLM 提供商面板等特性，并积极保持与官方上游同步.

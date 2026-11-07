@@ -457,7 +457,7 @@ impl Render for MenuPreview {
                                     .h(px(160.))
                                     .items_center()
                                     .justify_center()
-                                    .border_1()
+                                    .border_2()
                                     .border_color(cx.theme().colors().border)
                                     .rounded_md()
                                     .child(Label::new("Right-click menu").color(Color::Muted))

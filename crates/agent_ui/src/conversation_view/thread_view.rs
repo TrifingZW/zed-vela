@@ -2090,7 +2090,7 @@ impl ThreadView {
             v_flex()
                 .id("recoverable-submissions")
                 .py_1()
-                .border_t_1()
+                .border_t_2()
                 .border_color(cx.theme().colors().border)
                 .max_h(px(120.))
                 .overflow_y_scroll()

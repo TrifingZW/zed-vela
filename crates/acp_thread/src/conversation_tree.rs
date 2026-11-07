@@ -234,7 +234,11 @@ impl ConversationTree {
             && node.awaiting_user_message
         {
             node.awaiting_user_message = false;
-            node.label = label;
+            // Restored nodes already carry the label they were saved with; only
+            // refine placeholder labels from the incoming message.
+            if node.label == "Branch" || node.label == "Untitled" {
+                node.label = label;
+            }
             return false;
         }
 
@@ -284,12 +288,38 @@ impl ConversationTree {
 
     /// Refines a label that was assigned before the user message content was
     /// known, for example when the agent echoes a keyed message in chunks.
-    pub(crate) fn set_label_if_placeholder(&mut self, id: ConversationNodeId, label: SharedString) {
+    /// Returns whether the label changed.
+    pub(crate) fn set_label_if_placeholder(
+        &mut self,
+        id: ConversationNodeId,
+        label: SharedString,
+    ) -> bool {
         if let Some(node) = self.nodes.get_mut(&id)
             && (node.label == "Branch" || node.label == "Untitled")
+            && node.label != label
         {
             node.label = label;
+            return true;
         }
+        false
+    }
+
+    /// The transcript offset where `id`'s segment starts, if it is on the
+    /// active path.
+    pub(crate) fn start_offset(&self, id: ConversationNodeId) -> Option<usize> {
+        let path = self.path_to(id);
+        let mut offset = 0;
+        for path_id in path {
+            if path_id == id {
+                return Some(offset);
+            }
+            offset = offset.saturating_add(
+                self.nodes
+                    .get(&path_id)
+                    .map_or(0, |node| node.entry_count),
+            );
+        }
+        None
     }
 
     /// Moves the active transcript into `entries` for `target`, storing the
@@ -735,6 +765,51 @@ mod tests {
             .expect("returned to first branch");
 
         assert!(tree.node(empty).is_none());
+    }
+
+    #[test]
+    fn label_refinement_only_replaces_placeholders() {
+        let mut tree = ConversationTree::new();
+        assert!(tree.begin_user_turn("Branch".into()));
+        let node = tree.active_node();
+
+        assert!(tree.set_label_if_placeholder(node, "Real prompt".into()));
+        assert!(!tree.set_label_if_placeholder(node, "Another prompt".into()));
+        assert_eq!(
+            tree.label(node).map(|label| label.to_string()),
+            Some("Real prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn awaiting_restored_node_keeps_its_saved_label() {
+        let mut tree = ConversationTree::new();
+        tree.restore(SerializedConversationTree {
+            active: 1,
+            nodes: vec![
+                SerializedConversationNode {
+                    id: 0,
+                    parent: None,
+                    label: "Main".into(),
+                    awaiting_user_message: false,
+                    start_client_id: None,
+                },
+                SerializedConversationNode {
+                    id: 1,
+                    parent: Some(0),
+                    label: "Saved prompt".into(),
+                    awaiting_user_message: true,
+                    start_client_id: None,
+                },
+            ],
+        });
+
+        assert!(!tree.begin_user_turn("Branch".into()));
+        assert_eq!(
+            tree.label(ConversationNodeId::from_u64(1))
+                .map(|label| label.to_string()),
+            Some("Saved prompt".to_string())
+        );
     }
 
     #[test]

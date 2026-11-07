@@ -235,9 +235,6 @@ impl LlmProviderForm {
         form.api_url.update(cx, |editor, cx| {
             editor.set_text(api_url, window, cx);
         });
-        form.api_key.update(cx, |editor, cx| {
-            editor.set_placeholder_text("Leave empty to keep the current API key", window, cx);
-        });
         form.custom_headers = custom_headers
             .iter()
             .filter_map(|(name, value)| {
@@ -575,6 +572,21 @@ impl ConfigureModelsDialog {
         if let Some(kind) = compatible_provider_kind(&provider_id, cx)
             && let Some(form) = LlmProviderForm::editing(provider_id.clone(), kind, window, cx)
         {
+            // Load any stored key before rendering the form so it can report
+            // whether the provider is already configured.
+            if let Some(provider) = LanguageModelRegistry::read_global(cx).provider(&provider_id) {
+                let provider_name = provider.name().0.clone();
+                cx.spawn(async move |_this, cx| {
+                    match cx.update(|cx| provider.authenticate(cx)).await {
+                        Ok(()) | Err(AuthenticateError::CredentialsNotFound) => {}
+                        Err(error) => log::error!(
+                            "Failed to load the API key for {provider_name}: {error}"
+                        ),
+                    }
+                    anyhow::Ok(())
+                })
+                .detach_and_log_err(cx);
+            }
             self.set_mode(Mode::Form(Box::new(form)), window, cx);
             return;
         }
@@ -686,7 +698,8 @@ impl ConfigureModelsDialog {
         if config.has_key {
             // Drop any editor we no longer need once the key is stored.
             self.api_key_editors.remove(&provider_id);
-            return Self::render_configured_api_key(provider, config);
+            let env_var_name = config.is_from_env_var.then_some(config.env_var_name);
+            return Self::render_configured_api_key(provider, env_var_name);
         }
 
         let editor = if let Some(api_key_editor) = self.api_key_editors.get(&provider_id) {
@@ -727,10 +740,9 @@ impl ConfigureModelsDialog {
 
     fn render_configured_api_key(
         provider: &Arc<dyn LanguageModelProvider>,
-        config: ApiKeyConfiguration,
+        env_var_name: Option<SharedString>,
     ) -> AnyElement {
-        let is_from_env_var = config.is_from_env_var;
-        let env_var_name = config.env_var_name;
+        let is_from_env_var = env_var_name.is_some();
         let button_id = format!("reset-api-key-{}", provider.id().0);
 
         let configured_label = if is_from_env_var {
@@ -749,7 +761,7 @@ impl ConfigureModelsDialog {
                     .button_label("Reset Key")
                     .button_tab_index(0)
                     .disabled(is_from_env_var)
-                    .when(is_from_env_var, |this| {
+                    .when_some(env_var_name, |this, env_var_name| {
                         this.tooltip_label(format!(
                             "To reset your API key, unset the {env_var_name} environment variable."
                         ))
@@ -1065,7 +1077,34 @@ impl ConfigureModelsDialog {
             return div().into_any_element();
         };
         let editing = form.editing.is_some();
-        let reset_api_key = editing.then(|| self.render_reset_api_key_button(cx));
+        // Compatible providers store their key in the system keychain, so query
+        // the provider directly to show the same configured state as single-key
+        // providers such as DeepSeek.
+        let configured_api_key = form.editing.as_ref().and_then(|provider_id| {
+            let provider = LanguageModelRegistry::read_global(cx).provider(provider_id)?;
+            if provider.is_authenticated(cx) {
+                let env_var_name = provider.api_key_env_var_name(cx);
+                Some((provider, env_var_name))
+            } else {
+                None
+            }
+        });
+        let api_key_body = match configured_api_key {
+            Some((provider, env_var_name)) => {
+                Self::render_configured_api_key(&provider, env_var_name)
+            }
+            None => render_compact_input(&form.api_key, cx).into_any_element(),
+        };
+        let api_key_section = v_flex()
+            .w_full()
+            .gap_1p5()
+            .child(render_form_field_header(
+                "API Key",
+                "Keys are stored in the system keychain, not in settings.json. Reset Key removes the stored key so you can enter a new one.",
+                !editing,
+            ))
+            .child(api_key_body)
+            .into_any_element();
 
         v_flex()
             .w_full()
@@ -1091,55 +1130,12 @@ impl ConfigureModelsDialog {
                 true,
                 cx,
             ))
-            .child(render_form_field(
-                "API Key",
-                if editing {
-                    "Leave empty to keep the current key. Changing the API URL requires entering the key again."
-                } else {
-                    "Stored in the system keychain, not in settings.json."
-                },
-                &form.api_key,
-                !editing,
-                cx,
-            ))
-            .when_some(reset_api_key, |this, reset_api_key| {
-                this.child(
-                    h_flex()
-                        .w_full()
-                        .justify_end()
-                        .child(reset_api_key),
-                )
-            })
+            .child(api_key_section)
             .child(render_custom_headers(form, cx))
             .child(render_models_section(form, window, cx))
             .when_some(form.error.clone(), |this, error| {
                 this.child(render_form_error(error))
             })
-            .into_any_element()
-    }
-
-    fn render_reset_api_key_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("reset-provider-api-key", "Reset API Key")
-            .style(ButtonStyle::Outlined)
-            .label_size(LabelSize::Small)
-            .tooltip(Tooltip::text(
-                "Removes the stored key. Keys supplied through environment variables must be unset there instead.",
-            ))
-            .on_click(cx.listener(|this, _, window, cx| {
-                let Mode::Form(form) = &mut this.mode else {
-                    return;
-                };
-                form.api_key
-                    .update(cx, |editor, cx| editor.set_text("", window, cx));
-                let Some(provider_id) = &form.editing else {
-                    return;
-                };
-                let Some(provider) = LanguageModelRegistry::read_global(cx).provider(provider_id)
-                else {
-                    return;
-                };
-                provider.set_api_key(None, cx).detach_and_log_err(cx);
-            }))
             .into_any_element()
     }
 
@@ -1570,6 +1566,33 @@ impl Render for ConfigureModelsDialog {
 
 // -- Form widgets -----------------------------------------------------------
 
+fn render_form_field_header(
+    title: &'static str,
+    description: &'static str,
+    required: bool,
+) -> impl IntoElement {
+    v_flex()
+        .gap_0p5()
+        .child(
+            h_flex()
+                .gap_0p5()
+                .child(Label::new(title))
+                .when(required, |this| {
+                    this.child(
+                        Label::new("*")
+                            .size(LabelSize::Small)
+                            .color(Color::Error)
+                            .mb_2(),
+                    )
+                }),
+        )
+        .child(
+            Label::new(description)
+                .size(LabelSize::Small)
+                .color(Color::Muted),
+        )
+}
+
 fn render_form_field(
     title: &'static str,
     description: &'static str,
@@ -1580,28 +1603,7 @@ fn render_form_field(
     v_flex()
         .w_full()
         .gap_1p5()
-        .child(
-            v_flex()
-                .gap_0p5()
-                .child(
-                    h_flex()
-                        .gap_0p5()
-                        .child(Label::new(title))
-                        .when(required, |this| {
-                            this.child(
-                                Label::new("*")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Error)
-                                    .mb_2(),
-                            )
-                        }),
-                )
-                .child(
-                    Label::new(description)
-                        .size(LabelSize::Small)
-                        .color(Color::Muted),
-                ),
-        )
+        .child(render_form_field_header(title, description, required))
         .child(render_compact_input(editor, cx))
         .into_any_element()
 }

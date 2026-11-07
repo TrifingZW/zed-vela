@@ -3,7 +3,7 @@ use anthropic::{AnthropicError, AnthropicModelMode};
 use anyhow::Result;
 use credentials_provider::CredentialsProvider;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
-use gpui::{App, AppContext, AsyncApp, Entity, Task};
+use gpui::{App, AppContext, AsyncApp, Entity, SharedString, Task};
 use http_client::{CustomHeaders, HttpClient};
 use language_model::{
     AuthenticateError, IconOrSvg, LanguageModel, LanguageModelClient, LanguageModelCompletionError,
@@ -353,6 +353,14 @@ impl LanguageModelProvider for AnthropicCompatibleLanguageModelProvider {
 
     fn is_authenticated(&self, cx: &App) -> bool {
         self.state.read(cx).is_authenticated()
+    }
+
+    fn api_key_env_var_name(&self, cx: &App) -> Option<SharedString> {
+        let state = self.state.read(cx);
+        state
+            .api_key_state
+            .is_from_env_var()
+            .then(|| state.api_key_state.env_var_name().clone())
     }
 
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>> {

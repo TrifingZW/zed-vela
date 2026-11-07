@@ -4356,6 +4356,58 @@ impl AcpThread {
         Ok(())
     }
 
+    /// Whether the conversation tree can be edited right now: only idle root
+    /// threads of agents that archive branches expose tree mutations.
+    pub fn can_edit_conversation_tree(&self) -> bool {
+        self.ensure_conversation_tree_switch_allowed().is_ok()
+    }
+
+    /// Removes `node` and everything below it from the conversation tree.
+    ///
+    /// When the active branch is inside the removed subtree, the visible
+    /// transcript falls back to the nearest surviving ancestor and the agent
+    /// session is synchronized, matching a branch switch. Removing an inactive
+    /// branch only changes the tree structure.
+    pub fn remove_conversation_node(
+        &mut self,
+        node: ConversationNodeId,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        self.ensure_conversation_tree_switch_allowed()?;
+        self.flush_streaming_text(cx);
+
+        let old_path = self
+            .conversation_tree
+            .path_to(self.conversation_tree.active_node());
+        let old_segments = self.live_path_segments(&old_path);
+
+        let active_removed = self
+            .conversation_tree
+            .remove_branch(node, &mut self.entries)?;
+
+        if active_removed
+            && let Some(session_truncate) = self.connection.truncate(self.session_id(), cx)
+        {
+            let new_path = self
+                .conversation_tree
+                .path_to(self.conversation_tree.active_node());
+            // The session helper re-enters this thread through `cancel`, so it
+            // must run only after this update has released the entity lease.
+            cx.spawn(async move |_this, cx| {
+                cx.update(|cx| session_truncate.switch_branch(&old_segments, &new_path, cx))
+                    .await
+                    .log_err();
+            })
+            .detach();
+        }
+
+        cx.emit(AcpThreadEvent::ConversationTreeChanged {
+            transcript_reset: active_removed,
+        });
+        cx.notify();
+        Ok(())
+    }
+
     /// Replaces the conversation tree with a restored structure. The entries of
     /// every branch are rebuilt afterwards by replaying the archived messages
     /// of each node: call [`Self::begin_conversation_node_replay`] before

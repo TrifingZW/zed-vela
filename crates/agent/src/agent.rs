@@ -990,8 +990,12 @@ impl NativeAgent {
                                 )
                             };
                             if let Some(session) = this.sessions.get_mut(&session_id) {
-                                session.thread.update(cx, |thread, _cx| {
+                                session.thread.update(cx, |thread, cx| {
                                     thread.set_conversation_tree_snapshot(snapshot);
+                                    // The tree is part of the persisted thread, so
+                                    // structural changes (such as deletions) must
+                                    // schedule a save even when no messages moved.
+                                    cx.notify();
                                 });
                             }
                         }

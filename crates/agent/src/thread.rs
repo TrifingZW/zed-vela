@@ -2142,6 +2142,19 @@ impl Thread {
         tree: Option<SerializedConversationTree>,
     ) {
         self.conversation_tree_snapshot = tree;
+        self.prune_archived_branches();
+    }
+
+    /// Drops archived messages of branches that no longer exist in the tree.
+    fn prune_archived_branches(&mut self) {
+        let Some(snapshot) = self.conversation_tree_snapshot.as_ref() else {
+            // Without a tree there are no inactive branches left to archive.
+            self.archived_branch_messages.clear();
+            return;
+        };
+        let nodes: HashSet<u64> = snapshot.nodes.iter().map(|node| node.id).collect();
+        self.archived_branch_messages
+            .retain(|id, _| nodes.contains(&id.as_u64()));
     }
 
     /// Persists the conversation tree: the structure from the snapshot, plus
@@ -2194,6 +2207,93 @@ impl Thread {
             nodes: snapshot.nodes.clone(),
             branches,
         })
+    }
+
+    /// Builds a database thread for a copy of this thread that keeps only the
+    /// conversation branch ending at `node`: the messages of that path and a
+    /// linear tree of its nodes, with `node` active. Returns `None` when the
+    /// node is not part of the current tree.
+    pub fn fork_db_thread_for_node(
+        &self,
+        node: ConversationNodeId,
+        cx: &App,
+    ) -> Option<Task<DbThread>> {
+        let snapshot = self.conversation_tree_snapshot.as_ref()?;
+        let node_by_id: HashMap<u64, &acp_thread::SerializedConversationNode> = snapshot
+            .nodes
+            .iter()
+            .map(|serialized| (serialized.id, serialized))
+            .collect();
+        let target = *node_by_id.get(&node.as_u64())?;
+
+        let active_path = Self::conversation_tree_active_path(&snapshot.nodes, snapshot.active);
+        let spec: Vec<(ConversationNodeId, Option<ClientUserMessageId>)> = active_path
+            .iter()
+            .filter_map(|id| node_by_id.get(id))
+            .map(|serialized| {
+                (
+                    ConversationNodeId::from_u64(serialized.id),
+                    serialized.start_client_id.clone(),
+                )
+            })
+            .collect();
+        let live: HashMap<ConversationNodeId, Vec<Arc<Message>>> = self
+            .live_segment_ranges(&spec)
+            .into_iter()
+            .map(|(node, start, end)| (node, self.messages[start..end].to_vec()))
+            .collect();
+
+        // A fork keeps only the node's own path; branches hanging off it are
+        // not copied, so the new thread's transcript always matches its tree.
+        let path = Self::conversation_tree_active_path(&snapshot.nodes, node.as_u64());
+        let mut messages = Vec::new();
+        let mut nodes = Vec::with_capacity(path.len());
+        let mut branches = Vec::with_capacity(path.len());
+        for id in path {
+            let serialized = node_by_id.get(&id)?;
+            let node_id = ConversationNodeId::from_u64(id);
+            let segment = if active_path.contains(&id) {
+                live.get(&node_id).cloned().unwrap_or_default()
+            } else {
+                self.archived_branch_messages
+                    .get(&node_id)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            messages.extend(segment.iter().cloned());
+            branches.push(DbConversationBranch {
+                id,
+                messages: segment,
+            });
+            nodes.push((*serialized).clone());
+        }
+
+        let label = target.label.trim();
+        let title = if label.is_empty() || label == "Branch" || label == "Untitled" {
+            self.title().unwrap_or_default()
+        } else {
+            SharedString::from(target.label.clone())
+        };
+        let conversation_tree = DbConversationTree {
+            active: node.as_u64(),
+            nodes,
+            branches,
+        };
+
+        let db_thread = self.to_db(cx);
+        Some(cx.background_spawn(async move {
+            let mut db_thread = db_thread.await;
+            db_thread.title = title;
+            db_thread.updated_at = Utc::now();
+            db_thread.messages = messages;
+            // The summary, draft, and scroll position belong to the original
+            // branch and would misrepresent the fork.
+            db_thread.detailed_summary = None;
+            db_thread.draft_prompt = None;
+            db_thread.ui_scroll_position = None;
+            db_thread.conversation_tree = Some(conversation_tree);
+            db_thread
+        }))
     }
 
     /// How to rebuild the conversation tree of a restored thread: the tree
@@ -2826,6 +2926,7 @@ impl Thread {
         }
         self.messages = messages;
         self.clear_summary();
+        self.prune_archived_branches();
         cx.notify();
         Ok(())
     }

@@ -1,17 +1,145 @@
 use std::sync::Arc;
 
 use ::util::ResultExt;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use collections::HashSet;
 use convert_case::{Case, Casing};
 use credentials_provider::CredentialsProvider;
+use futures::AsyncReadExt;
 use gpui::{App, AppContext as _, Context, Entity, SharedString, Task, TaskExt, Window};
+use http_client::{
+    AsyncBody, CustomHeaders, HttpClient, Method, Request as HttpRequest, RequestBuilderExt,
+};
 use language_model::{ApiKeyState, AuthenticateError, EnvVar};
+use serde::Deserialize;
 use settings::SettingsStore;
 use ui::{ElevationIndex, Tooltip, prelude::*};
 use ui_input::InputField;
 
 pub trait ApiCompatibleProviderSettings: Clone + Default + PartialEq + 'static {
     fn api_url(&self) -> &str;
+}
+
+/// Which compatible-provider API convention a model list request should use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompatibleProviderFlavor {
+    OpenAi,
+    Anthropic,
+}
+
+/// A model advertised by a compatible provider's model-list endpoint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FetchedModel {
+    pub name: String,
+    pub display_name: Option<String>,
+}
+
+/// Fetches the model list advertised by a compatible provider's API.
+///
+/// Model-list endpoints usually expose only identifiers and display names, so
+/// callers start fetched models from their existing defaults and let the user
+/// refine capabilities before saving.
+pub async fn fetch_models(
+    client: Arc<dyn HttpClient>,
+    flavor: CompatibleProviderFlavor,
+    api_url: &str,
+    api_key: Option<&str>,
+    custom_headers: &CustomHeaders,
+) -> Result<Vec<FetchedModel>> {
+    let (uri, api_key_header) = match flavor {
+        CompatibleProviderFlavor::OpenAi => {
+            (format!("{}/models", api_url.trim_end_matches('/')), "Authorization")
+        }
+        CompatibleProviderFlavor::Anthropic => (
+            format!("{}/v1/models?limit=1000", api_url.trim_end_matches('/')),
+            "X-Api-Key",
+        ),
+    };
+
+    let mut request = HttpRequest::builder()
+        .method(Method::GET)
+        .uri(uri.clone())
+        .header("Accept", "application/json")
+        .extra_headers(custom_headers);
+    if flavor == CompatibleProviderFlavor::Anthropic {
+        request = request.header("Anthropic-Version", "2023-06-01");
+    }
+    if let Some(api_key) = api_key.filter(|api_key| !api_key.trim().is_empty()) {
+        let value = match flavor {
+            CompatibleProviderFlavor::OpenAi => format!("Bearer {}", api_key.trim()),
+            CompatibleProviderFlavor::Anthropic => api_key.trim().to_string(),
+        };
+        request = request.header(api_key_header, value);
+    }
+
+    let request = request
+        .body(AsyncBody::default())
+        .with_context(|| format!("failed to build a model list request for {uri}"))?;
+    let host = request.uri().host().unwrap_or(api_url).to_owned();
+    let mut response = client
+        .send(request)
+        .await
+        .with_context(|| format!("failed to reach {host}"))?;
+    let status = response.status();
+    let mut body = String::new();
+    response
+        .body_mut()
+        .read_to_string(&mut body)
+        .await
+        .with_context(|| format!("failed to read the model list response from {host}"))?;
+
+    if !status.is_success() {
+        let detail: String = body.trim().chars().take(300).collect();
+        if detail.is_empty() {
+            anyhow::bail!("{host} returned {status}");
+        } else {
+            anyhow::bail!("{host} returned {status}: {detail}");
+        }
+    }
+
+    parse_models(&body).with_context(|| format!("failed to parse the model list from {host}"))
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ModelListResponse {
+    Data { data: Vec<ModelListEntry> },
+    Models { models: Vec<ModelListEntry> },
+    List(Vec<ModelListEntry>),
+}
+
+#[derive(Deserialize)]
+struct ModelListEntry {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+fn parse_models(body: &str) -> Result<Vec<FetchedModel>> {
+    let entries = match serde_json::from_str::<ModelListResponse>(body)? {
+        ModelListResponse::Data { data } => data,
+        ModelListResponse::Models { models } => models,
+        ModelListResponse::List(models) => models,
+    };
+
+    let mut seen = HashSet::default();
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| {
+            let name = entry.id.or(entry.name)?.trim().to_string();
+            if name.is_empty() || !seen.insert(name.clone()) {
+                return None;
+            }
+            let display_name = entry
+                .display_name
+                .map(|display_name| display_name.trim().to_string())
+                .filter(|display_name| !display_name.is_empty() && display_name != &name);
+            Some(FetchedModel { name, display_name })
+        })
+        .collect())
 }
 
 pub struct ApiCompatibleProviderState<S: ApiCompatibleProviderSettings> {
@@ -296,5 +424,63 @@ impl<S: ApiCompatibleProviderSettings> Render for ApiCompatibleProviderConfigura
                 )
                 .into_any()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_open_ai_style_model_lists() {
+        let models = parse_models(r#"{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"}]}"#)
+            .expect("parse OpenAI model list");
+        assert_eq!(
+            models,
+            vec![
+                FetchedModel {
+                    name: "gpt-4o".into(),
+                    display_name: None,
+                },
+                FetchedModel {
+                    name: "gpt-4o-mini".into(),
+                    display_name: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_anthropic_style_model_lists_and_removes_duplicates() {
+        let models = parse_models(
+            r#"{"data":[{"id":"claude-3","display_name":"Claude 3"},{"id":"claude-3","display_name":"Claude 3"},{"id":"claude-4","display_name":"claude-4"}]}"#,
+        )
+        .expect("parse Anthropic model list");
+        assert_eq!(
+            models,
+            vec![
+                FetchedModel {
+                    name: "claude-3".into(),
+                    display_name: Some("Claude 3".into()),
+                },
+                FetchedModel {
+                    name: "claude-4".into(),
+                    display_name: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_bare_model_arrays_and_name_fields() {
+        let models = parse_models(r#"[{"name":"local-model"}]"#)
+            .expect("parse bare model array");
+        assert_eq!(
+            models,
+            vec![FetchedModel {
+                name: "local-model".into(),
+                display_name: None,
+            }]
+        );
     }
 }

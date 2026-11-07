@@ -272,6 +272,14 @@ impl LanguageModelProvider for OpenAiCompatibleLanguageModelProvider {
             .then(|| state.api_key_state.env_var_name().clone())
     }
 
+    fn api_key_for_request(&self, cx: &App) -> Option<String> {
+        let state = self.state.read(cx);
+        state
+            .api_key_state
+            .key(state.settings.api_url())
+            .map(|api_key| api_key.to_string())
+    }
+
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>> {
         self.state.update(cx, |state, cx| state.authenticate(cx))
     }

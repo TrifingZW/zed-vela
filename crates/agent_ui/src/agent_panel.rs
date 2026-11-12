@@ -40,7 +40,7 @@ use crate::ManageProfiles;
 use crate::agent_connection_store::AgentConnectionStore;
 use crate::branch_graph::{
     BRANCH_GRAPH_MAX_ZOOM, BRANCH_GRAPH_MIN_ZOOM, BRANCH_GRAPH_NODE_HEIGHT,
-    BRANCH_GRAPH_NODE_WIDTH, layout_branch_graph, paint_branch_edge,
+    BRANCH_GRAPH_NODE_WIDTH, BranchGraphNodeLayout, layout_branch_graph, paint_branch_edge,
 };
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
 use crate::terminal_thread_metadata_store::{
@@ -1193,6 +1193,10 @@ pub struct AgentPanel {
     branch_graph_pan: GpuiPoint<Pixels>,
     branch_graph_pan_origin: Option<GpuiPoint<Pixels>>,
     branch_graph_viewport_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Cached node placement, rebuilt when the tree changes rather than on every
+    /// frame. Zooming and panning only transform these graph coordinates.
+    branch_graph_layout: Option<Rc<Vec<BranchGraphNodeLayout>>>,
+    branch_graph_focus_handle: FocusHandle,
     branch_graph_error: Option<SharedString>,
     branch_graph_menu_candidate: Option<BranchGraphMenuCandidate>,
     branch_graph_context_menu: Option<DeployedBranchGraphContextMenu>,
@@ -1627,6 +1631,8 @@ impl AgentPanel {
             branch_graph_pan: point(px(16.0), px(12.0)),
             branch_graph_pan_origin: None,
             branch_graph_viewport_bounds: Rc::new(Cell::new(None)),
+            branch_graph_layout: None,
+            branch_graph_focus_handle: cx.focus_handle(),
             branch_graph_error: None,
             branch_graph_menu_candidate: None,
             branch_graph_context_menu: None,
@@ -4484,6 +4490,7 @@ impl AgentPanel {
         self.branch_graph_context_menu = None;
         if !self.branch_graph_open {
             self._branch_graph_observation = None;
+            self.branch_graph_layout = None;
             return;
         }
         let thread = self
@@ -4502,6 +4509,7 @@ impl AgentPanel {
             self.branch_graph_context_menu = None;
             self.settle_branch_graph_zoom();
             self._branch_graph_observation = None;
+            self.branch_graph_layout = None;
             cx.notify();
             return;
         }
@@ -4518,6 +4526,9 @@ impl AgentPanel {
                             | AcpThreadEvent::ConversationTreeChanged { .. }
                     )
                 {
+                    // The graph shows labels and entry counts, so its cached
+                    // placement must be rebuilt on the same changes.
+                    this.branch_graph_layout = None;
                     cx.notify();
                 }
             })
@@ -6370,15 +6381,21 @@ impl AgentPanel {
                                         .icon_size(IconSize::Small)
                                         .toggle_state(self.branch_graph_open)
                                         .tooltip(Tooltip::text("Conversation Branch Graph"))
-                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                        .on_click(cx.listener(|this, _, window, cx| {
                                             this.branch_graph_open = !this.branch_graph_open;
                                             if this.branch_graph_open {
                                                 this.branch_graph_error = None;
+                                                this.branch_graph_layout = None;
+                                                // The graph occludes the composer, so without
+                                                // moving focus Escape would still reach the
+                                                // hidden editor and cancel the running turn.
+                                                window.focus(&this.branch_graph_focus_handle, cx);
                                             } else {
                                                 this.branch_graph_pan_origin = None;
                                                 this.branch_graph_menu_candidate = None;
                                                 this.branch_graph_context_menu = None;
                                                 this.settle_branch_graph_zoom();
+                                                this.activation_focus_handle(cx).focus(window, cx);
                                             }
                                             this.refresh_branch_graph_observation(cx);
                                             cx.notify();
@@ -6418,7 +6435,10 @@ impl AgentPanel {
             let tree = thread_ref.conversation_tree();
             (tree.branches(), tree.active_node())
         };
-        let layouts = layout_branch_graph(&branches);
+        let layouts = self
+            .branch_graph_layout
+            .get_or_insert_with(|| Rc::new(layout_branch_graph(&branches)))
+            .clone();
 
         let zoom = self.branch_graph_zoom;
         let pan_x: f32 = self.branch_graph_pan.x.into();
@@ -6581,7 +6601,7 @@ impl AgentPanel {
                                     .icon_size(IconSize::Small)
                                     .icon_color(Color::Muted)
                                     .tooltip(Tooltip::text("Close conversation tree"))
-                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                    .on_click(cx.listener(|this, _, window, cx| {
                                         this.branch_graph_open = false;
                                         this.branch_graph_error = None;
                                         this.branch_graph_pan_origin = None;
@@ -6589,6 +6609,8 @@ impl AgentPanel {
                                         this.branch_graph_context_menu = None;
                                         this.settle_branch_graph_zoom();
                                         this._branch_graph_observation = None;
+                                        this.branch_graph_layout = None;
+                                        this.activation_focus_handle(cx).focus(window, cx);
                                         cx.notify();
                                     })),
                             ),
@@ -6760,7 +6782,7 @@ impl AgentPanel {
                 .size_full(),
             );
 
-        for node in &layouts {
+        for node in layouts.iter() {
             let (screen_x, screen_y) = node_screen_position(node);
             let is_active = node.is_active;
             let is_on_active_path = node.is_on_active_path;
@@ -6784,7 +6806,10 @@ impl AgentPanel {
             } else {
                 muted
             };
-            let meta = format!("{} entries", node.entry_count);
+            let meta = match node.entry_count {
+                1 => "1 entry".to_string(),
+                count => format!("{count} entries"),
+            };
             let card_shadow = ElevationIndex::ModalSurface.shadow(cx);
 
             let id = node.id;
@@ -6861,11 +6886,33 @@ impl AgentPanel {
                 .inset_0()
                 .size_full()
                 .occlude()
+                .track_focus(&self.branch_graph_focus_handle)
+                .on_action(cx.listener(Self::cancel_branch_graph))
                 .bg(colors.panel_background)
                 .child(header)
                 .child(viewport)
                 .into_any_element(),
         )
+    }
+
+    /// Closes the conversation graph on Escape; without this the key would fall
+    /// through to the panel's workspace-level handlers.
+    fn cancel_branch_graph(
+        &mut self,
+        _: &menu::Cancel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.branch_graph_open = false;
+        self.branch_graph_error = None;
+        self.branch_graph_pan_origin = None;
+        self.branch_graph_menu_candidate = None;
+        self.branch_graph_context_menu = None;
+        self.settle_branch_graph_zoom();
+        self._branch_graph_observation = None;
+        self.branch_graph_layout = None;
+        self.activation_focus_handle(cx).focus(window, cx);
+        cx.notify();
     }
 
     fn center_branch_graph_on_active(&mut self, cx: &mut Context<Self>) {
@@ -6883,7 +6930,10 @@ impl AgentPanel {
             let tree = thread.conversation_tree();
             (tree.branches(), tree.active_node())
         };
-        let layouts = layout_branch_graph(&branches);
+        let layouts = self
+            .branch_graph_layout
+            .get_or_insert_with(|| Rc::new(layout_branch_graph(&branches)))
+            .clone();
         let Some(active) = layouts.iter().find(|node| node.id == active_id) else {
             return;
         };
@@ -6938,14 +6988,13 @@ impl AgentPanel {
             let thread = thread.read(cx);
             let tree = thread.conversation_tree();
             let branches = tree.branches();
-            let label = branches
-                .iter()
-                .find(|branch| branch.id == node)
+            let branch = branches.iter().find(|branch| branch.id == node);
+            let label = branch
                 .map(|branch| branch.label.clone())
                 .unwrap_or_default();
             (
-                branches.iter().any(|branch| branch.id == node),
-                node.as_u64() == 0,
+                branch.is_some(),
+                branch.is_some_and(|branch| branch.parent.is_none()),
                 thread.can_edit_conversation_tree(),
                 label,
             )
@@ -6977,9 +7026,7 @@ impl AgentPanel {
             .icon_color(Color::Error)
             .disabled(!can_mutate)
             .handler({
-                let panel = panel.clone();
                 let thread = thread.clone();
-                let label = label.clone();
                 move |window, cx| {
                     panel.update(cx, |this, cx| {
                         this.confirm_delete_branch(&thread, node, label.clone(), window, cx);
@@ -6996,10 +7043,17 @@ impl AgentPanel {
         });
 
         window.focus(&menu.focus_handle(cx), cx);
-        let subscription = cx.subscribe(&menu, |this, _, _: &DismissEvent, cx| {
-            this.branch_graph_context_menu = None;
-            cx.notify();
-        });
+        let subscription =
+            cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
+                this.branch_graph_context_menu = None;
+                // The menu owned focus while it was open; hand it back so the
+                // graph keeps receiving keys. A fork or delete that closed the
+                // graph has already focused its new view, so leave that alone.
+                if this.branch_graph_open {
+                    window.focus(&this.branch_graph_focus_handle, cx);
+                }
+                cx.notify();
+            });
         self.branch_graph_context_menu = Some(DeployedBranchGraphContextMenu {
             menu,
             position,
@@ -7109,11 +7163,21 @@ impl AgentPanel {
         cx.spawn_in(window, async move |this, cx| {
             let db_thread = db_thread.await;
             let title = db_thread.title.clone();
-            thread_store
+            if let Err(error) = thread_store
                 .update(&mut cx.clone(), |store, cx| {
                     store.save_thread(new_session_id.clone(), db_thread, folder_paths, cx)
                 })
-                .await?;
+                .await
+            {
+                this.update_in(cx, |this, _window, cx| {
+                    this.report_branch_graph_error(
+                        format!("Failed to save the forked thread: {error}"),
+                        cx,
+                    );
+                })
+                .log_err();
+                return anyhow::Ok(());
+            }
 
             this.update_in(cx, |this, window, cx| {
                 this.branch_graph_open = false;
@@ -7123,6 +7187,7 @@ impl AgentPanel {
                 this.branch_graph_context_menu = None;
                 this.settle_branch_graph_zoom();
                 this._branch_graph_observation = None;
+                this.branch_graph_layout = None;
                 this.open_thread(new_session_id, None, Some(title), window, cx);
                 cx.notify();
             })?;

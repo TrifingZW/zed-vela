@@ -1,5 +1,5 @@
 use acp_thread::{ConversationBranch, ConversationNodeId};
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use gpui::{Bounds, Hsla, Pixels, Point, Window, fill, point, size};
 
 pub(crate) const BRANCH_GRAPH_NODE_WIDTH: f32 = 168.0;
@@ -43,9 +43,15 @@ pub(crate) fn layout_branch_graph(branches: &[ConversationBranch]) -> Vec<Branch
         id: ConversationNodeId,
         depth: f32,
         next_row: &mut f32,
+        visiting: &mut HashSet<ConversationNodeId>,
         children: &HashMap<ConversationNodeId, Vec<ConversationNodeId>>,
         positions: &mut HashMap<ConversationNodeId, (f32, f32)>,
     ) -> f32 {
+        // `ConversationTree` cannot build a cycle, but a corrupt snapshot could.
+        // Without this guard a cycle would recurse until the stack overflows.
+        if !visiting.insert(id) {
+            return *next_row;
+        }
         let child_ids = children.get(&id).cloned().unwrap_or_default();
         let row = if child_ids.is_empty() {
             let row = *next_row;
@@ -54,17 +60,26 @@ pub(crate) fn layout_branch_graph(branches: &[ConversationBranch]) -> Vec<Branch
         } else {
             let rows = child_ids
                 .into_iter()
-                .map(|child| place(child, depth + 1.0, next_row, children, positions))
+                .map(|child| place(child, depth + 1.0, next_row, visiting, children, positions))
                 .collect::<Vec<_>>();
             (rows.first().copied().unwrap_or(0.0) + rows.last().copied().unwrap_or(0.0)) * 0.5
         };
+        visiting.remove(&id);
         positions.insert(id, (depth, row));
         row
     }
 
     let mut positions = HashMap::default();
     let mut next_row = 0.0f32;
-    place(root, 0.0, &mut next_row, &children, &mut positions);
+    let mut visiting = HashSet::default();
+    place(
+        root,
+        0.0,
+        &mut next_row,
+        &mut visiting,
+        &children,
+        &mut positions,
+    );
 
     branches
         .iter()

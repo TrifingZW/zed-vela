@@ -94,13 +94,13 @@ use crate::thread_metadata_store::{ThreadId, ThreadMetadataStore};
 use crate::ui::{AgentNotification, AgentNotificationEvent};
 use crate::{
     Agent, AgentDiffPane, AgentInitialContent, AgentPanel, AgentPanelEvent, AllowAlways, AllowOnce,
-    AuthorizeToolCall, ClearMessageQueue, CycleFavoriteModels, CycleModeSelector,
-    CycleThinkingEffort, EditFirstQueuedMessage, ExpandMessageEditor, Follow, KeepAll, NewThread,
-    OpenAddContextMenu, OpenAgentDiff, RejectAll, RejectOnce, RemoveFirstQueuedMessage,
-    ScrollOutputLineDown, ScrollOutputLineUp, ScrollOutputPageDown, ScrollOutputPageUp,
-    ScrollOutputToBottom, ScrollOutputToNextMessage, ScrollOutputToPreviousMessage,
-    ScrollOutputToTop, SendImmediately, SendNextQueuedMessage, ToggleFastMode,
-    ToggleProfileSelector, ToggleSteerFirstQueuedMessage, ToggleThinkingEffortMenu,
+    AuthorizeToolCall, ClearMessageQueue, ContinueGeneration, CycleFavoriteModels,
+    CycleModeSelector, CycleThinkingEffort, EditFirstQueuedMessage, ExpandMessageEditor, Follow,
+    KeepAll, NewThread, OpenAddContextMenu, OpenAgentDiff, RejectAll, RejectOnce,
+    RemoveFirstQueuedMessage, ScrollOutputLineDown, ScrollOutputLineUp, ScrollOutputPageDown,
+    ScrollOutputPageUp, ScrollOutputToBottom, ScrollOutputToNextMessage,
+    ScrollOutputToPreviousMessage, ScrollOutputToTop, SendImmediately, SendNextQueuedMessage,
+    ToggleFastMode, ToggleProfileSelector, ToggleSteerFirstQueuedMessage, ToggleThinkingEffortMenu,
     ToggleThinkingMode, UndoLastReject,
 };
 
@@ -2066,10 +2066,7 @@ impl ConversationView {
                             list_state.scroll_to_end();
                         });
                         active.update(cx, |active, cx| {
-                            active.editing_message = None;
-                            active.sync_editor_mode(cx);
-                            active.sync_generating_indicator(cx);
-                            cx.notify();
+                            active.reset_for_transcript_switch(cx);
                         });
                     } else {
                         active.update(cx, |_, cx| cx.notify());

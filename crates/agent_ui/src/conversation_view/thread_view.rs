@@ -77,6 +77,10 @@ pub(crate) const UNSETTLED_SUBMISSION_REVEAL_DELAY: Duration = Duration::from_se
 
 const DATA_RETENTION_LEARN_MORE_URL: &str = "https://support.claude.com/en/articles/15425996-data-retention-practices-for-mythos-class-models";
 
+/// Sent as a user message when the user resumes a paused turn. The model is far
+/// more likely to pick up where it stopped than if the context simply ended.
+const CONTINUE_GENERATION_PROMPT: &str = "Continue from where you left off.";
+
 pub(super) struct ThreadRecovery {
     pub session_id: acp_v2::SessionId,
     pub work_dirs: Option<PathList>,
@@ -754,6 +758,9 @@ pub struct ThreadView {
     pub thread_retry_status: Option<RetryStatus>,
     pub(super) thread_error: Option<ThreadError>,
     pub thread_error_markdown: Option<Entity<Markdown>>,
+    /// Set when the user stops a turn, so the composer can offer a one-click
+    /// "continue" instead of making them retype a prompt.
+    last_turn_was_cancelled: bool,
     pub token_limit_callout_dismissed: bool,
     pub last_token_limit_telemetry: Option<acp_thread::TokenUsageRatio>,
     thread_feedback: ThreadFeedbackState,
@@ -1291,6 +1298,7 @@ impl ThreadView {
             thread_retry_status: None,
             thread_error: None,
             thread_error_markdown: None,
+            last_turn_was_cancelled: false,
             token_limit_callout_dismissed: false,
             last_token_limit_telemetry: None,
             thread_feedback: Default::default(),
@@ -2421,6 +2429,7 @@ impl ThreadView {
             let generation = this.update(cx, |this, cx| {
                 this.clear_external_source_prompt_warning(cx);
                 this.thread_error.take();
+                this.last_turn_was_cancelled = false;
                 (!uses_reported_activity).then(|| this.start_turn(cx))
             })?;
 
@@ -2725,10 +2734,69 @@ impl ThreadView {
     }
 
     pub fn cancel_generation(&mut self, cx: &mut Context<Self>) {
+        // Stopping an idle thread (e.g. pressing Escape on an empty composer)
+        // would otherwise make a continue button appear with nothing to resume.
+        if self.thread.read(cx).status() != ThreadStatus::Idle {
+            self.last_turn_was_cancelled = true;
+        }
         self.thread_retry_status.take();
         self.thread_error.take();
         self.message_queue.pause();
         self._cancel_task = Some(self.cancel_thread(&self.thread, cx));
+        self.sync_generating_indicator(cx);
+        cx.notify();
+    }
+
+    /// The continue button only makes sense right after the user stopped a turn:
+    /// a fresh thread has nothing to resume, and an in-flight turn already shows
+    /// the stop button.
+    fn can_continue_generation(&self, cx: &App) -> bool {
+        self.last_turn_was_cancelled
+            && !self.is_loading_contents
+            && self.thread.read(cx).status() == ThreadStatus::Idle
+            && self.has_visible_conversation(cx)
+    }
+
+    /// Resumes a turn the user stopped, so they don't have to retype a
+    /// "continue" prompt to get the agent going again.
+    pub fn continue_generation(
+        &mut self,
+        _: &ContinueGeneration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_continue_generation(cx) {
+            return;
+        }
+
+        // `cancel_generation` freezes the queue so queued messages don't run
+        // after a turn the user stopped; resuming is an explicit signal that
+        // the queue should flow again once this turn finishes.
+        self.message_queue.resume();
+        cx.emit(AcpThreadViewEvent::Interacted);
+
+        let contents =
+            acp_v2::ContentBlock::Text(acp_v2::TextContent::new(CONTINUE_GENERATION_PROMPT));
+        self.send_content(
+            Task::ready(Ok(Some((vec![contents], Vec::new())))),
+            false,
+            window,
+            cx,
+        );
+    }
+
+    /// Drops per-transcript UI state when the thread swaps to another branch, so
+    /// a stale error, retry banner, or pending "continue" left over from the
+    /// branch just left can't act on the branch now being shown.
+    pub(super) fn reset_for_transcript_switch(&mut self, cx: &mut Context<Self>) {
+        self.thread_error.take();
+        self.thread_error_markdown = None;
+        self.thread_retry_status = None;
+        self.last_turn_was_cancelled = false;
+        self.editing_message = None;
+        // Switching is only allowed while idle, so nothing is in flight.
+        self.current_submission = None;
+        self.sync_editor_mode(cx);
         self.sync_generating_indicator(cx);
         cx.notify();
     }
@@ -2770,6 +2838,7 @@ impl ThreadView {
     }
 
     pub fn retry_generation(&mut self, cx: &mut Context<Self>) {
+        self.last_turn_was_cancelled = false;
         self.thread_error.take();
 
         let thread = &self.thread;
@@ -5600,6 +5669,7 @@ impl ThreadView {
             .bg(editor_bg_color)
             .justify_center()
             .on_action(cx.listener(Self::handle_message_editor_move_up))
+            .on_action(cx.listener(Self::continue_generation))
             .map(|this| {
                 if has_messages {
                     this.on_action(cx.listener(Self::expand_message_editor))
@@ -6737,6 +6807,17 @@ impl ThreadView {
                     )
                 })
                 .on_click(cx.listener(|this, _event, _, cx| this.cancel_generation(cx)))
+                .into_any_element()
+        } else if is_editor_empty && self.can_continue_generation(cx) {
+            IconButton::new("continue-generation", IconName::PlayFilled)
+                .style(ButtonStyle::Filled)
+                .icon_color(Color::Accent)
+                .tooltip(move |_window, cx| {
+                    Tooltip::for_action("Continue Generation", &ContinueGeneration, cx)
+                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.continue_generation(&ContinueGeneration, window, cx);
+                }))
                 .into_any_element()
         } else {
             let send_icon = if is_generating {

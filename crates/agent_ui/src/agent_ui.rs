@@ -307,6 +307,8 @@ actions!(
         CycleFavoriteModels,
         /// Expands the message editor to full size.
         ExpandMessageEditor,
+        /// Resumes the last turn after the user stopped it.
+        ContinueGeneration,
         /// Archives the currently selected thread.
         ArchiveSelectedThread,
         /// Removes the currently selected thread.

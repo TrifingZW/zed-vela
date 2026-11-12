@@ -168,12 +168,24 @@ impl ApiKeyState {
                 "bug: attempted to store API key in system keychain when API key is from env var",
             )));
         }
-        if self.url != url {
+        let previous_credentials_key = if self.url != url {
+            // A scoped key belongs to this provider alone, so its entry for the
+            // previous URL can never be reused and is safe to remove. Unscoped
+            // keys are shared per URL, so they are left alone.
+            let previous_key = if self.credentials_scope.is_some() {
+                let previous_url = self.url.clone();
+                Some(self.credentials_key(previous_url.as_str()))
+            } else {
+                None
+            };
             self.url = url.clone();
             self.load_status = LoadStatus::NotLoaded;
             self.load_task = None;
             cx.notify();
-        }
+            previous_key
+        } else {
+            None
+        };
 
         let credentials_key = self.credentials_key(&url);
         // Legacy keys live under the bare URL. Remove that entry as well when a key is
@@ -193,6 +205,14 @@ impl ApiKeyState {
                 if let Some(legacy_url) = &legacy_url {
                     provider.delete_credentials(legacy_url, cx).await.log_err();
                 }
+            }
+            if let Some(previous_credentials_key) = &previous_credentials_key
+                && previous_credentials_key.as_str() != credentials_key.as_str()
+            {
+                provider
+                    .delete_credentials(previous_credentials_key, cx)
+                    .await
+                    .log_err();
             }
             ent.update(cx, |ent, cx| {
                 let key_state = get_this(ent);
@@ -282,8 +302,7 @@ impl ApiKeyState {
             load_task.completion.clone()
         } else {
             let credentials_key = self.credentials_key(&url);
-            let load_task =
-                Self::load(url.clone(), credentials_key, get_this.clone(), provider, cx);
+            let load_task = Self::load(url.clone(), credentials_key, get_this, provider, cx);
             let completion = load_task.completion.clone();
             self.url = url;
             self.load_status = LoadStatus::NotLoaded;
@@ -292,12 +311,8 @@ impl ApiKeyState {
             completion
         };
 
-        cx.spawn(async move |ent, cx| {
+        cx.spawn(async move |_ent, _cx| {
             completion.await.ok();
-            ent.update(cx, |ent, _cx| {
-                get_this(ent).load_status.clone().into_authenticate_result()
-            })
-            .ok();
             Ok(())
         })
     }
@@ -703,6 +718,49 @@ mod tests {
         assert!(
             credentials.keys.get(URL).is_none(),
             "the legacy entry would be migrated back on the next load"
+        );
+    }
+
+    #[gpui::test]
+    async fn changing_the_url_removes_the_previous_scoped_entry(cx: &mut TestAppContext) {
+        let provider = Arc::new(FakeCredentialsProvider::default());
+        let state = new_state(Some(SCOPE), cx);
+        let url = SharedString::from(URL);
+        state
+            .update(cx, |state, cx| {
+                state.store(
+                    url.clone(),
+                    Some("first-key".into()),
+                    |state| state,
+                    provider.clone(),
+                    cx,
+                )
+            })
+            .await
+            .expect("store the first key");
+        state
+            .update(cx, |state, cx| {
+                state.store(
+                    SharedString::from(OTHER_URL),
+                    Some("second-key".into()),
+                    |state| state,
+                    provider.clone(),
+                    cx,
+                )
+            })
+            .await
+            .expect("store a key for the new url");
+
+        let first_key = format!("zed-llm-provider:{}:{SCOPE}:{URL}", SCOPE.len());
+        let second_key = format!("zed-llm-provider:{}:{SCOPE}:{OTHER_URL}", SCOPE.len());
+        let credentials = provider.state.lock();
+        assert!(
+            credentials.keys.get(&first_key).is_none(),
+            "the key for the previous URL can never be reused"
+        );
+        assert_eq!(
+            credentials.keys.get(&second_key).map(Vec::as_slice),
+            Some(b"second-key".as_slice())
         );
     }
 

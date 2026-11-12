@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use ::util::ResultExt;
 use anyhow::{Context as _, Result};
@@ -8,7 +8,8 @@ use credentials_provider::CredentialsProvider;
 use futures::AsyncReadExt;
 use gpui::{App, AppContext as _, Context, Entity, SharedString, Task, TaskExt, Window};
 use http_client::{
-    AsyncBody, CustomHeaders, HttpClient, Method, Request as HttpRequest, RequestBuilderExt,
+    AsyncBody, CustomHeaders, HttpClient, HttpRequestExt as _, Method, Request as HttpRequest,
+    RequestBuilderExt,
 };
 use language_model::{ApiKeyState, AuthenticateError, EnvVar};
 use serde::Deserialize;
@@ -34,6 +35,10 @@ pub struct FetchedModel {
     pub display_name: Option<String>,
 }
 
+/// Upper bound for a model list request. The dialog disables its fetch button while
+/// the request is in flight, so hanging here would strand the user.
+const MODEL_LIST_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Fetches the model list advertised by a compatible provider's API.
 ///
 /// Model-list endpoints usually expose only identifiers and display names, so
@@ -57,7 +62,12 @@ pub async fn fetch_models(
         ),
     };
 
-    let request = HttpRequest::builder().method(Method::GET).uri(uri.clone());
+    let request = HttpRequest::builder()
+        .method(Method::GET)
+        .uri(uri.clone())
+        // A model list endpoint that accepts the connection but never replies would
+        // otherwise leave the dialog stuck on "Fetching…" with no way to retry.
+        .timeout(MODEL_LIST_REQUEST_TIMEOUT);
 
     // Custom headers are appended to the request, so a custom `Authorization`
     // would sit next to the managed one. Drop the headers this request owns and

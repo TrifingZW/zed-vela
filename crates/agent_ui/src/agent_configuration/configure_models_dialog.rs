@@ -451,8 +451,8 @@ impl ModelInput {
                 cx,
             ),
             display_name: new_input("e.g. GPT-5", None, false, window, cx),
-            max_completion_tokens: new_input("200000", Some("200000"), false, window, cx),
-            max_output_tokens: new_input("Max Output Tokens", Some("32000"), false, window, cx),
+            max_completion_tokens: new_input("200000", None, false, window, cx),
+            max_output_tokens: new_input("Max Output Tokens", None, false, window, cx),
             max_tokens: new_input("Max Tokens", Some("200000"), false, window, cx),
             reasoning_effort: OpenAiReasoningEffort::Medium,
             tool_override: new_input("Model name to use for tool calls", None, false, window, cx),
@@ -659,7 +659,7 @@ impl ConfigureModelsDialog {
             // Load any stored key before rendering the form so it can report
             // whether the provider is already configured.
             if let Some(provider) = LanguageModelRegistry::read_global(cx).provider(&provider_id) {
-                let provider_name = provider.name().0.clone();
+                let provider_name = provider.name().0;
                 cx.spawn(async move |_this, cx| {
                     match cx.update(|cx| provider.authenticate(cx)).await {
                         Ok(()) | Err(AuthenticateError::CredentialsNotFound) => {}
@@ -2372,12 +2372,30 @@ fn validate_llm_provider_form(
         return Err("API Key is required when changing the API URL".into());
     }
 
-    let custom_headers = values
-        .custom_headers
-        .iter()
-        .filter(|(name, _)| !name.trim().is_empty())
-        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
-        .collect::<HashMap<_, _>>();
+    let mut custom_headers = HashMap::default();
+    for (name, value) in &values.custom_headers {
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() {
+            continue;
+        }
+        // Managed by the request builders, so they cannot be overridden.
+        if ["Authorization", "Content-Type", "Accept"]
+            .iter()
+            .any(|reserved| reserved.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        let header_name = name
+            .parse::<HeaderName>()
+            .map_err(|_| SharedString::from(format!("Invalid custom header name: {name}")))?;
+        value
+            .parse::<HeaderValue>()
+            .map_err(|_| SharedString::from(format!("Invalid value for custom header: {name}")))?;
+        // Store the canonical lower-case name so differently-cased duplicates
+        // merge instead of becoming two headers at request time.
+        custom_headers.insert(header_name.as_str().to_ascii_lowercase(), value.to_string());
+    }
     let custom_headers = (!custom_headers.is_empty()).then_some(custom_headers);
 
     let models = match values.kind {
@@ -2414,10 +2432,13 @@ fn validate_llm_provider_form(
 }
 
 fn parse_model_name(model: &ModelValues) -> Result<String, SharedString> {
-    if model.name.is_empty() {
+    // Trimming keeps a whitespace-only name from passing validation and makes
+    // the uniqueness check agree with the trimmed names produced by "Fetch Models".
+    let name = model.name.trim();
+    if name.is_empty() {
         return Err("Model Name cannot be empty".into());
     }
-    Ok(model.name.clone())
+    Ok(name.to_string())
 }
 
 fn parse_open_ai_model(

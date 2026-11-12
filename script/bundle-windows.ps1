@@ -193,9 +193,9 @@ function ZipZedAndItsFriendsDebug {
     $items = @(
         ".\$CargoOutDir\zed.pdb",
         ".\$CargoOutDir\cli.pdb",
-        ".\$CargoOutDir\auto_update_helper.pdb",
+        ".\$CargoOutDir\auto-update-helper.pdb",
         ".\$CargoOutDir\explorer_command_injector.pdb",
-        ".\$CargoOutDir\remote_server.pdb"
+        ".\$CargoOutDir\remote-server.pdb"
     ) | Where-Object { Test-Path $_ }
 
     if ($items.Count -eq 0) {

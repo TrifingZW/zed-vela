@@ -128,10 +128,12 @@ impl IClassFactory_Impl for ExplorerCommandInjectorFactory_Impl {
 }
 
 const MODULE_ID: GUID = cfg_select! {
-    feature = "stable" => { GUID::from_u128(0x6a1f6b13_3b82_48a1_9e06_7bb0a6d0bffd) },
-    feature = "preview" => { GUID::from_u128(0xaf8e85ea_fb20_4db2_93cf_56513c1ec697) },
-    feature = "nightly" => { GUID::from_u128(0x266f2cfe_1653_42af_b55c_fe3590c83871) },
-    _ => { GUID::from_u128(0x685f4d49_6718_4c55_b271_ebb5c6a48d6f) },
+    // Must match the `com:Class Id` in the matching AppxManifest, otherwise
+    // Explorer activates a CLSID that `DllGetClassObject` rejects.
+    feature = "stable" => { GUID::from_u128(0x23dcbfa8_00d9_43ac_b3a5_cec8ea7647c7) },
+    feature = "preview" => { GUID::from_u128(0x40953bb5_93a6_4024_af04_304a52b0f8b4) },
+    feature = "nightly" => { GUID::from_u128(0xd2482bf9_e654_4e15_ba9c_8725e9111dcc) },
+    _ => { GUID::from_u128(0x874e976f_94e2_4ff4_aa9f_a78d693c8843) },
 };
 
 #[unsafe(no_mangle)]

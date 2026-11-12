@@ -11,7 +11,7 @@ use paths::remote_servers_dir;
 use release_channel::{AppCommitSha, ReleaseChannel};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use settings::{RegisterSetting, Settings, SettingsStore};
+use settings::{RegisterSetting, Settings};
 use smol::fs::File;
 use smol::{
     fs,
@@ -247,6 +247,9 @@ async fn unmount_disk_image(mount_path: &Path) {
     }
 }
 
+// Registered so existing `auto_update` settings still parse. Polling is disabled
+// for Zed Vela, so the value is never read.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, RegisterSetting)]
 struct AutoUpdateSetting(bool);
 
@@ -276,33 +279,9 @@ pub fn init(client: Arc<Client>, cx: &mut App) {
 
     let version = release_channel::AppVersion::global(cx);
     let auto_updater = cx.new(|cx| {
-        let updater = AutoUpdater::new(version, client, cx);
-
         // Zed Vela: automatic updates stay off. The release feed only serves
         // upstream Zed installers, which would replace this build.
-        let poll_for_updates = false;
-
-        if option_env!("ZED_UPDATE_EXPLANATION").is_none()
-            && env::var("ZED_UPDATE_EXPLANATION").is_err()
-            && poll_for_updates
-        {
-            let mut update_subscription = AutoUpdateSetting::get_global(cx)
-                .0
-                .then(|| updater.start_polling(cx));
-
-            cx.observe_global::<SettingsStore>(move |updater: &mut AutoUpdater, cx| {
-                if AutoUpdateSetting::get_global(cx).0 {
-                    if update_subscription.is_none() {
-                        update_subscription = Some(updater.start_polling(cx))
-                    }
-                } else {
-                    update_subscription.take();
-                }
-            })
-            .detach();
-        }
-
-        updater
+        AutoUpdater::new(version, client, cx)
     });
     cx.set_global(GlobalAutoUpdate(Some(auto_updater)));
 }
@@ -1349,6 +1328,8 @@ mod tests {
         },
     };
     use tempfile::tempdir;
+
+    use settings::SettingsStore;
 
     #[ctor::ctor(unsafe)]
     fn init_logger() {

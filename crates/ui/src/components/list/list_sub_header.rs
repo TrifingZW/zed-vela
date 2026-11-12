@@ -55,7 +55,16 @@ impl RenderOnce for ListSubHeader {
             .child(
                 div()
                     .h_5()
-                    .when(self.inset, |this| this.px_2())
+                    .when(self.inset, |this| {
+                        // Zed Vela: an inset `ListItem`'s content starts at
+                        // `Base04` (outer) + `Base06` (inner) from the list edge.
+                        // Match that at every UI density so sub-headers stay
+                        // horizontally aligned with the item content below them;
+                        // this equals the previous fixed 8px at the default density.
+                        this.px(px(f32::from(DynamicSpacing::Base06.px(cx))
+                            + f32::from(DynamicSpacing::Base04.px(cx))
+                            - f32::from(DynamicSpacing::Base02.px(cx))))
+                    })
                     .when(self.selected, |this| {
                         this.bg(cx.theme().colors().ghost_element_selected)
                     })

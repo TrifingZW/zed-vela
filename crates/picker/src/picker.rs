@@ -1484,10 +1484,14 @@ impl<D: PickerDelegate> Picker<D> {
             .when(
                 self.delegate.separators_after_indices().contains(&ix),
                 |picker| {
+                    // Zed Vela: upstream paired this separator with a 1px bottom
+                    // border and `py(-1px)`. Keep the same overall row height with
+                    // the 2px border by pulling the extra pixel off the bottom.
                     picker
                         .border_color(cx.theme().colors().border_variant)
                         .border_b_2()
-                        .py(px(-1.0))
+                        .pt(px(-1.0))
+                        .pb(px(-2.0))
                 },
             )
     }

@@ -370,10 +370,16 @@ impl RenderOnce for ListItem {
                     .when(self.inset, |this| {
                         this.when_some(self.focused, |this, focused| {
                             if focused && !self.disabled {
-                                this.border_2()
+                                // Zed Vela: this border stays at 1px (upstream size).
+                                // It's invisible for most inset items (only painted
+                                // when the caller passes `focused`), but border widths
+                                // still reserve layout space; a 2px border here shifts
+                                // item content 1px per side and breaks alignment with
+                                // borders-less siblings like ListSubHeader.
+                                this.border_1()
                                     .border_color(cx.theme().colors().border_focused)
                             } else {
-                                this.border_2()
+                                this.border_1()
                             }
                         })
                         .when(self.selectable && !self.disabled, |this| {

@@ -2179,7 +2179,7 @@ impl Thread {
             })
             .collect();
         let live: HashMap<ConversationNodeId, Vec<Arc<Message>>> = self
-            .live_segment_ranges(&spec)
+            .live_segment_ranges(&spec)?
             .into_iter()
             .map(|(node, start, end)| (node, self.messages[start..end].to_vec()))
             .collect();
@@ -2238,7 +2238,7 @@ impl Thread {
             })
             .collect();
         let live: HashMap<ConversationNodeId, Vec<Arc<Message>>> = self
-            .live_segment_ranges(&spec)
+            .live_segment_ranges(&spec)?
             .into_iter()
             .map(|(node, start, end)| (node, self.messages[start..end].to_vec()))
             .collect();
@@ -2905,7 +2905,10 @@ impl Thread {
         // Clear pending message since cancel will try to flush it asynchronously,
         // and we don't want that content to be added after we truncate
         self.pending_message.take();
-        self.archive_live_segments(old_segments);
+        // The ranges must be resolved from the transcript as it stands now;
+        // failing here aborts before the messages are truncated.
+        let ranges = self.live_segment_ranges_or_error(old_segments)?;
+        self.archive_segments(ranges);
         let Some(position) = self.messages.iter().position(|message| {
             matches!(&**message, Message::User(UserMessage { id, .. }) if id == &client_user_message_id)
         }) else {
@@ -2930,7 +2933,10 @@ impl Thread {
         self.cancel(cx).detach();
         self.advance_prompt_id();
         self.pending_message.take();
-        self.archive_live_segments(old_segments);
+        // The ranges must be resolved from the transcript as it stands now;
+        // failing here aborts before the linear messages are rebuilt.
+        let ranges = self.live_segment_ranges_or_error(old_segments)?;
+        self.archive_segments(ranges);
         let mut messages = Vec::new();
         for node in new_path {
             messages.extend(
@@ -2950,25 +2956,32 @@ impl Thread {
 
     /// Moves the live linear messages into the per-node archive, splitting them
     /// by the user message that starts each node's segment.
-    fn archive_live_segments(
-        &mut self,
-        old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
-    ) {
-        for (node, start, end) in self.live_segment_ranges(old_segments) {
+    fn archive_segments(&mut self, ranges: Vec<(ConversationNodeId, usize, usize)>) {
+        for (node, start, end) in ranges {
             self.archived_branch_messages
                 .insert(node, self.messages[start..end].to_vec());
         }
     }
 
+    fn live_segment_ranges_or_error(
+        &self,
+        old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
+    ) -> Result<Vec<(ConversationNodeId, usize, usize)>> {
+        self.live_segment_ranges(old_segments).ok_or_else(|| {
+            anyhow!("Could not locate every conversation branch in the live transcript")
+        })
+    }
+
     /// Splits the live messages into per-node ranges given the nodes of a path
     /// in order, each paired with the client message id that starts its
     /// segment. The root (and empty nodes) have no id of their own and absorb
-    /// whatever precedes the first found boundary. Ids that cannot be found are
-    /// logged and their segment merges into the preceding one.
+    /// whatever precedes the first found boundary. Returns `None` when a
+    /// boundary's message is missing from the transcript: merging that segment
+    /// into its parent would silently drop the branch's own context.
     fn live_segment_ranges(
         &self,
         old_segments: &[(ConversationNodeId, Option<ClientUserMessageId>)],
-    ) -> Vec<(ConversationNodeId, usize, usize)> {
+    ) -> Option<Vec<(ConversationNodeId, usize, usize)>> {
         let mut boundaries: Vec<(ConversationNodeId, usize)> = Vec::new();
         let mut cursor = 0usize;
         let mut pending: Option<ConversationNodeId> = None;
@@ -2989,38 +3002,37 @@ impl Thread {
                     matches!(&**message, Message::User(UserMessage { id, .. }) if id == client_id)
                 })
                 .map(|position| cursor + position);
-            match position {
-                Some(position) => {
-                    if let Some(node) = pending.take() {
-                        boundaries.push((node, cursor));
-                    }
-                    boundaries.push((*node, position));
-                    cursor = position;
-                }
-                None => {
-                    log::warn!("no linear message found for conversation branch {node:?}");
-                }
+            let Some(position) = position else {
+                log::warn!("no linear message found for conversation branch {node:?}");
+                return None;
+            };
+            if let Some(node) = pending.take() {
+                boundaries.push((node, cursor));
             }
+            boundaries.push((*node, position));
+            cursor = position;
         }
         if boundaries.is_empty() {
             let node = pending.or_else(|| old_segments.last().map(|(node, _)| *node));
             return match node {
                 Some(node) if !self.messages.is_empty() => {
-                    vec![(node, 0, self.messages.len())]
+                    Some(vec![(node, 0, self.messages.len())])
                 }
-                _ => Vec::new(),
+                _ => Some(Vec::new()),
             };
         }
-        boundaries
-            .iter()
-            .enumerate()
-            .map(|(index, (node, start))| {
-                let end = boundaries
-                    .get(index + 1)
-                    .map_or(self.messages.len(), |(_, next_start)| *next_start);
-                (*node, *start, end)
-            })
-            .collect()
+        Some(
+            boundaries
+                .iter()
+                .enumerate()
+                .map(|(index, (node, start))| {
+                    let end = boundaries
+                        .get(index + 1)
+                        .map_or(self.messages.len(), |(_, next_start)| *next_start);
+                    (*node, *start, end)
+                })
+                .collect(),
+        )
     }
 
     pub fn latest_request_token_usage(&self) -> Option<language_model::TokenUsage> {

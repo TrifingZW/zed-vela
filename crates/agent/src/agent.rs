@@ -984,6 +984,14 @@ impl NativeAgent {
                             // the whole tree.
                             let (snapshot, session_id) = {
                                 let thread = acp_thread.read(cx);
+                                // A branch switch publishes the new tree before the
+                                // agent session has replayed the new path. Saving
+                                // now would pair the new tree with the previous
+                                // branch's messages, so wait for the switch to
+                                // publish this event again once both agree.
+                                if thread.is_switching_conversation_branch() {
+                                    return;
+                                }
                                 (
                                     thread.serialize_conversation_tree(),
                                     thread.session_id().clone(),

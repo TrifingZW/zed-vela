@@ -4389,12 +4389,27 @@ impl AcpThread {
                         .description(format!("{error:#}")),
                         cx,
                     );
+                } else {
+                    // The tree now matches the synchronized session. Observers
+                    // skipped persisting it while the switch was in flight, so
+                    // publish it now that the two agree.
+                    cx.emit(AcpThreadEvent::ConversationTreeChanged {
+                        transcript_reset: false,
+                    });
                 }
                 cx.emit(AcpThreadEvent::StatusChanged);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Whether the agent session is still catching up with a branch switch.
+    /// While this is true the tree and the linear transcript may describe
+    /// different branches, so persisting them together would pair a new tree
+    /// with the previous branch's messages.
+    pub fn is_switching_conversation_branch(&self) -> bool {
+        self.conversation_tree_switching
     }
 
     /// Whether the conversation tree can be edited right now: only idle root
@@ -4422,9 +4437,26 @@ impl AcpThread {
             .path_to(self.conversation_tree.active_node());
         let old_segments = self.live_path_segments(&old_path);
 
-        let active_removed = self
+        let removed = self
             .conversation_tree
             .remove_branch(node, &mut self.entries)?;
+        // Removed branches can own running terminals. Drop them the same way
+        // `rewind` does, otherwise the shells outlive the conversation that
+        // started them.
+        let terminals_to_remove: Vec<acp_v2::TerminalId> = removed
+            .entries
+            .iter()
+            .flat_map(|entry| entry.terminals())
+            .filter_map(|terminal| terminal.read(cx).id().clone().into())
+            .collect();
+        for terminal_id in terminals_to_remove {
+            if let Some(terminal) = self.terminals.remove(&terminal_id) {
+                terminal.update(cx, |terminal, cx| {
+                    terminal.kill(cx);
+                });
+            }
+        }
+        let active_removed = removed.active_removed;
 
         if active_removed {
             self.had_error = false;

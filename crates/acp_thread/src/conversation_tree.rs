@@ -112,6 +112,21 @@ pub(crate) enum ConversationTruncation {
     Discard,
 }
 
+/// What [`ConversationTree::remove_branch`] took out of the tree. The removed
+/// entries are handed back so the caller can release resources they own, such
+/// as running terminals.
+#[derive(Debug)]
+pub(crate) struct RemovedBranch {
+    pub active_removed: bool,
+    pub entries: Vec<AgentThreadEntry>,
+}
+
+/// Labels assigned before the user message content is known; they are refined
+/// as soon as the first message arrives.
+fn is_placeholder_label(label: &str) -> bool {
+    matches!(label, "Branch" | "Untitled")
+}
+
 #[derive(Debug)]
 pub struct ConversationTree {
     nodes: IndexMap<ConversationNodeId, ConversationNode>,
@@ -236,7 +251,7 @@ impl ConversationTree {
             node.awaiting_user_message = false;
             // Restored nodes already carry the label they were saved with; only
             // refine placeholder labels from the incoming message.
-            if node.label == "Branch" || node.label == "Untitled" {
+            if is_placeholder_label(&node.label) {
                 node.label = label;
             }
             return false;
@@ -266,8 +281,11 @@ impl ConversationTree {
         if !self.nodes.contains_key(&parent) {
             bail!("Cannot create a branch from an unknown conversation node");
         }
+        let Some(next_id) = self.next_id.checked_add(1) else {
+            bail!("Conversation branch ids are exhausted");
+        };
         let id = ConversationNodeId(self.next_id);
-        self.next_id = self.next_id.wrapping_add(1);
+        self.next_id = next_id;
         self.nodes.insert(
             id,
             ConversationNode {
@@ -326,7 +344,7 @@ impl ConversationTree {
         label: SharedString,
     ) -> bool {
         if let Some(node) = self.nodes.get_mut(&id)
-            && (node.label == "Branch" || node.label == "Untitled")
+            && is_placeholder_label(&node.label)
             && node.label != label
         {
             node.label = label;
@@ -338,6 +356,9 @@ impl ConversationTree {
     /// The transcript offset where `id`'s segment starts, if it is on the
     /// active path.
     pub(crate) fn start_offset(&self, id: ConversationNodeId) -> Option<usize> {
+        if !self.path_to(self.active).contains(&id) {
+            return None;
+        }
         let path = self.path_to(id);
         let mut offset = 0;
         for path_id in path {
@@ -446,6 +467,7 @@ impl ConversationTree {
     pub(crate) fn truncate_active_counts(&mut self, boundary: usize) {
         let path = self.path_to(self.active);
         let mut offset: usize = 0;
+        let mut active_index = None;
         for (position, id) in path.iter().enumerate() {
             let count = self.nodes.get(id).map_or(0, |node| node.entry_count);
             let end = offset.saturating_add(count);
@@ -454,30 +476,47 @@ impl ConversationTree {
                 if let Some(node) = self.nodes.get_mut(id) {
                     node.entry_count = keep;
                 }
-                self.active = if keep == 0 && position > 0 {
-                    path[position - 1]
+                active_index = Some(if keep == 0 && position > 0 {
+                    position - 1
                 } else {
-                    *id
-                };
+                    position
+                });
                 break;
             }
             if boundary == end {
-                self.active = *id;
+                active_index = Some(position);
                 break;
             }
             offset = end;
+        }
+
+        let Some(active_index) = active_index else {
+            return;
+        };
+        self.active = path[active_index];
+
+        // The truncated suffix is gone from the transcript, so the nodes that
+        // followed the boundary can no longer claim those entries. Leaving the
+        // counts in place would make them look populated until the next
+        // materialization silently reset them to zero.
+        for id in path.iter().skip(active_index + 1) {
+            if let Some(node) = self.nodes.get_mut(id) {
+                node.entry_count = 0;
+                node.stored_entries.clear();
+            }
         }
     }
 
     /// Removes `id` together with its descendants. When the active node is
     /// part of the removed subtree, the transcript is rebuilt from the
-    /// surviving ancestor and `true` is returned so the caller can synchronize
-    /// the agent session; otherwise the transcript is left untouched.
+    /// surviving ancestor and `active_removed` is returned so the caller can
+    /// synchronize the agent session. The removed entries are returned so the
+    /// caller can release resources (such as running terminals) they own.
     pub(crate) fn remove_branch(
         &mut self,
         id: ConversationNodeId,
         entries: &mut Vec<AgentThreadEntry>,
-    ) -> Result<bool> {
+    ) -> Result<RemovedBranch> {
         if id == self.root {
             bail!("The main conversation node cannot be removed");
         }
@@ -490,12 +529,15 @@ impl ConversationTree {
         if active_removed {
             self.take_active_entries(entries);
         }
-        self.remove_subtree(id);
+        let removed_entries = self.remove_subtree(id);
         if active_removed {
             self.active = fallback;
             self.load_active_path(entries);
         }
-        Ok(active_removed)
+        Ok(RemovedBranch {
+            active_removed,
+            entries: removed_entries,
+        })
     }
 
     /// Replaces the whole tree with a restored structure. Entries are not
@@ -669,12 +711,14 @@ impl ConversationTree {
             && !self.path_to(target).contains(&previous)
     }
 
-    fn remove_subtree(&mut self, id: ConversationNodeId) {
+    fn remove_subtree(&mut self, id: ConversationNodeId) -> Vec<AgentThreadEntry> {
+        let mut removed_entries = Vec::new();
         let mut pending = vec![id];
         while let Some(id) = pending.pop() {
-            let Some(node) = self.nodes.shift_remove(&id) else {
+            let Some(mut node) = self.nodes.shift_remove(&id) else {
                 continue;
             };
+            removed_entries.append(&mut node.stored_entries);
             if let Some(parent) = node.parent
                 && let Some(parent_node) = self.nodes.get_mut(&parent)
             {
@@ -685,6 +729,7 @@ impl ConversationTree {
             }
             pending.extend(node.children);
         }
+        removed_entries
     }
 }
 
@@ -1084,11 +1129,11 @@ mod tests {
         tree.record_entry_push();
         let active = tree.active_node();
 
-        let active_changed = tree
+        let removed = tree
             .remove_branch(sibling, &mut entries)
             .expect("removed inactive branch");
 
-        assert!(!active_changed);
+        assert!(!removed.active_removed);
         assert_eq!(tree.active_node(), active);
         assert_eq!(entry_ids(&entries), vec!["a1", "b1"]);
         assert!(tree.node(sibling).is_none());
@@ -1114,11 +1159,11 @@ mod tests {
         tree.record_entry_push();
         let second = tree.active_node();
 
-        let active_changed = tree
+        let removed = tree
             .remove_branch(second, &mut entries)
             .expect("removed active branch");
 
-        assert!(active_changed);
+        assert!(removed.active_removed);
         assert_eq!(tree.active_node(), first);
         assert_eq!(entry_ids(&entries), vec!["a1"]);
         assert!(tree.node(second).is_none());

@@ -94,13 +94,13 @@ use crate::thread_metadata_store::{ThreadId, ThreadMetadataStore};
 use crate::ui::{AgentNotification, AgentNotificationEvent};
 use crate::{
     Agent, AgentDiffPane, AgentInitialContent, AgentPanel, AgentPanelEvent, AllowAlways, AllowOnce,
-    AuthorizeToolCall, ClearMessageQueue, ContinueGeneration, CycleFavoriteModels,
-    CycleModeSelector, CycleThinkingEffort, EditFirstQueuedMessage, ExpandMessageEditor, Follow,
-    KeepAll, NewThread, OpenAddContextMenu, OpenAgentDiff, RejectAll, RejectOnce,
-    RemoveFirstQueuedMessage, ScrollOutputLineDown, ScrollOutputLineUp, ScrollOutputPageDown,
-    ScrollOutputPageUp, ScrollOutputToBottom, ScrollOutputToNextMessage,
-    ScrollOutputToPreviousMessage, ScrollOutputToTop, SendImmediately, SendNextQueuedMessage,
-    ToggleFastMode, ToggleProfileSelector, ToggleSteerFirstQueuedMessage, ToggleThinkingEffortMenu,
+    AuthorizeToolCall, ClearMessageQueue, CycleFavoriteModels, CycleModeSelector,
+    CycleThinkingEffort, EditFirstQueuedMessage, ExpandMessageEditor, Follow, KeepAll, NewThread,
+    OpenAddContextMenu, OpenAgentDiff, RejectAll, RejectOnce, RemoveFirstQueuedMessage,
+    ScrollOutputLineDown, ScrollOutputLineUp, ScrollOutputPageDown, ScrollOutputPageUp,
+    ScrollOutputToBottom, ScrollOutputToNextMessage, ScrollOutputToPreviousMessage,
+    ScrollOutputToTop, SendImmediately, SendNextQueuedMessage, ToggleFastMode,
+    ToggleProfileSelector, ToggleSteerFirstQueuedMessage, ToggleThinkingEffortMenu,
     ToggleThinkingMode, UndoLastReject,
 };
 
@@ -5286,6 +5286,59 @@ pub(crate) mod tests {
             .send(Ok(acp_v2::PromptResponse::new("queued-echo")))
             .expect("queued submission pending");
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn test_retry_button_requires_retry_capable_agent(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (conversation, cx) =
+            setup_conversation_view(StubAgentServer::default_response(), cx).await;
+        add_to_workspace(conversation.clone(), cx);
+        let view = active_thread(&conversation, cx);
+        let thread = view.read_with(cx, |view, _| view.thread.clone());
+        thread
+            .update(cx, |thread, cx| {
+                thread.upsert_user_message(
+                    acp_v2::UserMessage::new("retry-user").content(vec![
+                        acp_v2::ContentBlock::Text(acp_v2::TextContent::new("Retry me")),
+                    ]),
+                    cx,
+                )
+            })
+            .expect("user message");
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("ICON-RotateCw").is_none(),
+            "agents without retry support should not offer a retry control"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_retry_button_appears_for_retry_capable_agent(cx: &mut TestAppContext) {
+        init_test(cx);
+        let connection = StubAgentConnection::new().with_retry();
+        let (conversation, cx) =
+            setup_conversation_view(StubAgentServer::new(connection), cx).await;
+        add_to_workspace(conversation.clone(), cx);
+        let view = active_thread(&conversation, cx);
+        let thread = view.read_with(cx, |view, _| view.thread.clone());
+        thread
+            .update(cx, |thread, cx| {
+                thread.upsert_user_message(
+                    acp_v2::UserMessage::new("retry-user").content(vec![
+                        acp_v2::ContentBlock::Text(acp_v2::TextContent::new("Retry me")),
+                    ]),
+                    cx,
+                )
+            })
+            .expect("user message");
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("ICON-RotateCw").is_some(),
+            "a retry-capable agent should show the retry control next to send"
+        );
     }
 
     #[gpui::test]

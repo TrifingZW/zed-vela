@@ -124,11 +124,11 @@ impl Render for Toolbar {
             .border_color(cx.theme().colors().border_variant)
             .bg(cx.theme().colors().toolbar_background)
             .when(has_left_items || has_right_items, |this| {
-                // Matches the agent panel toolbar: a compact row height with the
-                // same 4px horizontal inset and no vertical padding. The row is a
-                // minimum height, not a fixed one: `overflow_x_hidden` clips the
-                // vertical axis to the container's content box as well, so a fixed
-                // height would cut off taller primary items like the project search
+                // The primary row mirrors the secondary row's 8px inset so items
+                // in both rows share the same left and right edges. Its height is
+                // a minimum, not a fixed one: `overflow_x_hidden` clips the
+                // vertical axis to the content box as well, so a fixed height
+                // would cut off taller primary items like the project search
                 // bar's replace and filter rows.
                 this.child(
                     h_flex()
@@ -137,7 +137,7 @@ impl Render for Toolbar {
                         .items_center()
                         .justify_between()
                         .gap(DynamicSpacing::Base04.rems(cx))
-                        .px(DynamicSpacing::Base04.rems(cx))
+                        .px(DynamicSpacing::Base08.rems(cx))
                         .when(has_left_items, |this| {
                             this.child(
                                 h_flex()

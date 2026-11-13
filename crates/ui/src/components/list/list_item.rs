@@ -365,7 +365,7 @@ impl RenderOnce for ListItem {
                     .map(|this| match self.spacing {
                         ListItemSpacing::Dense => this,
                         ListItemSpacing::ExtraDense => this.py_neg_px(),
-                        ListItemSpacing::Sparse => this.py_1(),
+                        ListItemSpacing::Sparse => this.py(DynamicSpacing::Base06.rems(cx)),
                     })
                     .when(self.inset, |this| {
                         this.when_some(self.focused, |this, focused| {
@@ -585,5 +585,71 @@ impl Component for ListItem {
                 ),
             ])
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Background, TestAppContext};
+
+    struct SparseItemTestView;
+
+    impl Render for SparseItemTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div()
+                    .w(px(300.))
+                    .debug_selector(|| "LIST".to_owned())
+                    .child(
+                        ListItem::new("item")
+                            .inset(true)
+                            .spacing(ListItemSpacing::Sparse)
+                            .toggle_state(true)
+                            .child(
+                                div()
+                                    .h(px(20.))
+                                    .debug_selector(|| "CONTENT".to_owned())
+                                    .child(Label::new("Item")),
+                            ),
+                    ),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn test_sparse_item_content_padding_is_uniform(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let settings_store = settings::SettingsStore::test(cx);
+            cx.set_global(settings_store);
+            theme_settings::init(theme::LoadThemes::JustBase, cx);
+        });
+        let (_view, cx) = cx.add_window_view(|_, _| SparseItemTestView);
+        let list_bounds = cx.debug_bounds("LIST").expect("list bounds");
+        let content_bounds = cx.debug_bounds("CONTENT").expect("content bounds");
+        let (selected, scale_factor) = cx.update(|window, cx| {
+            (
+                Background::from(cx.theme().colors().ghost_element_selected),
+                window.scale_factor(),
+            )
+        });
+        let highlight = cx
+            .update(|window, _| {
+                window
+                    .painted_quads()
+                    .into_iter()
+                    .find(|quad| quad.background == selected)
+            })
+            .expect("selected item background");
+        let highlight_left = px(highlight.bounds.left().as_f32() / scale_factor);
+        let highlight_top = px(highlight.bounds.top().as_f32() / scale_factor);
+        let highlight_height = px(highlight.bounds.size.height.as_f32() / scale_factor);
+
+        // The row draws its highlight 4px inside the list, and pads the content
+        // by the same 6px on every side.
+        assert_eq!(highlight_left - list_bounds.left(), px(4.));
+        assert_eq!(content_bounds.left() - highlight_left, px(6.));
+        assert_eq!(content_bounds.top() - highlight_top, px(6.));
+        assert_eq!(highlight_height - content_bounds.size.height, px(12.));
     }
 }

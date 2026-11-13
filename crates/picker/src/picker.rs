@@ -1522,6 +1522,7 @@ impl<D: PickerDelegate> Picker<D> {
         } else {
             ListSizingBehavior::Infer
         };
+        let vertical_inset = DynamicSpacing::Base04.rems(cx);
 
         match &self.element_container {
             ElementContainer::UniformList(scroll_handle) => uniform_list(
@@ -1535,7 +1536,7 @@ impl<D: PickerDelegate> Picker<D> {
             )
             .with_sizing_behavior(sizing_behavior)
             .flex_grow_1()
-            .py_1()
+            .py(vertical_inset)
             .track_scroll(&scroll_handle)
             .into_any_element(),
             ElementContainer::List(state) => list(
@@ -1546,7 +1547,7 @@ impl<D: PickerDelegate> Picker<D> {
             )
             .with_sizing_behavior(sizing_behavior)
             .flex_grow_1()
-            .py(DynamicSpacing::Base04.rems(cx))
+            .py(vertical_inset)
             .into_any_element(),
         }
     }
@@ -1646,7 +1647,7 @@ impl<D: PickerDelegate> Picker<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::TestAppContext;
+    use gpui::{Background, TestAppContext};
     use std::cell::Cell;
     use std::sync::Mutex;
 
@@ -1820,6 +1821,56 @@ mod tests {
             theme_settings::init(theme::LoadThemes::JustBase, cx);
             editor::init(cx);
         });
+    }
+
+    #[gpui::test]
+    async fn test_picker_item_highlight_inset(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        for uniform_list in [false, true] {
+            for embedded in [false, true] {
+                let (picker, cx) = cx.add_window_view(|window, cx| {
+                    let delegate = TestDelegate::new(vec![true; 40]);
+                    let picker = if uniform_list {
+                        Picker::uniform_list(delegate, window, cx)
+                    } else {
+                        Picker::list(delegate, window, cx)
+                    }
+                    .show_scrollbar(true);
+                    if embedded { picker.embedded() } else { picker }
+                });
+                cx.run_until_parked();
+                let picker_bounds = picker
+                    .read_with(cx, |picker, _| picker.picker_bounds.get())
+                    .expect("picker bounds");
+                let (selected, scale_factor) = cx.update(|window, cx| {
+                    (
+                        Background::from(cx.theme().colors().ghost_element_selected),
+                        window.scale_factor(),
+                    )
+                });
+                let quad = cx
+                    .update(|window, _| {
+                        window
+                            .painted_quads()
+                            .into_iter()
+                            .find(|quad| quad.background == selected)
+                    })
+                    .expect("selected item background");
+                let left = px(quad.bounds.left().as_f32() / scale_factor);
+                let right = px(quad.bounds.right().as_f32() / scale_factor);
+                let top = px(quad.bounds.top().as_f32() / scale_factor);
+                // Rows draw their highlight 4px inside the list on every
+                // presentation, so the result container never pads the sides
+                // and full-width separators can reach the surface border.
+                let expected_inset = px(4.);
+                // Layout snapping can move the painted edge by half a logical pixel.
+                assert!((left - picker_bounds.left() - expected_inset).abs() <= px(0.5));
+                assert!((picker_bounds.right() - right - expected_inset).abs() <= px(0.5));
+                // Search row (36px) + divider (2px) + the list's 4px inset.
+                assert!((top - picker_bounds.top() - px(42.)).abs() <= px(0.5));
+            }
+        }
     }
 
     #[gpui::test]

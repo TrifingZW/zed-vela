@@ -473,6 +473,7 @@ impl Render for BufferSearchBar {
             .id("buffer_search")
             .gap_2()
             .w_full()
+            .py(DynamicSpacing::Base08.rems(cx))
             .track_scroll(&self.scroll_handle)
             .key_context(key_context)
             .capture_action(cx.listener(Self::tab))

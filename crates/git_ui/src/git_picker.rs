@@ -416,7 +416,6 @@ impl Render for GitPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .occlude()
-            .w(self.width)
             .elevation_3(cx)
             .overflow_hidden()
             .when(self.popover_style, |el| {
@@ -480,8 +479,16 @@ impl Render for GitPicker {
                 el.on_action(cx.listener(Self::handle_drop_stash))
                     .on_action(cx.listener(Self::handle_show_stash))
             })
-            .child(self.render_tab_bar(cx))
-            .child(self.render_active_picker(window, cx))
+            // The elevation's border consumes layout width, so applying the
+            // configured width to the bordered container would clip the
+            // picker's right edge (including the row highlight's inset). Keep
+            // the width on the content and let the border extend it instead.
+            .child(
+                v_flex()
+                    .w(self.width)
+                    .child(self.render_tab_bar(cx))
+                    .child(self.render_active_picker(window, cx)),
+            )
     }
 }
 
